@@ -3,6 +3,7 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolutionTest do
 
   import ExUnit.CaptureLog
 
+  alias Commanded.Registration.SynRegistry
   alias Commanded.Registration.SynRegistry.ConflictResolution
   alias Commanded.Registration.SynRegistry.RecordingEventHandler
 
@@ -166,7 +167,7 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolutionTest do
 
   describe "adapter_scope?/1" do
     test "is true for the scope of every application the adapter was started for" do
-      :ok = ConflictResolution.install_for_scope(__MODULE__.OtherApp)
+      {:ok, [], _adapter_meta} = SynRegistry.child_spec(__MODULE__.OtherApp, [])
 
       assert ConflictResolution.adapter_scope?(@scope)
       assert ConflictResolution.adapter_scope?(__MODULE__.OtherApp)
@@ -331,7 +332,7 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolutionTest do
     test "leaves the host's scopes to the event handler installed before the first application" do
       Process.register(self(), RecordingEventHandler)
       :ok = install_adapter_over(RecordingEventHandler)
-      :ok = ConflictResolution.install_for_scope(__MODULE__.OtherApp)
+      {:ok, [], _adapter_meta} = SynRegistry.child_spec(__MODULE__.OtherApp, [])
       arguments = [@host_scope, @name, self(), :metadata, :normal]
 
       # Were the adapter to take itself for the earlier handler, the call would
@@ -345,11 +346,11 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolutionTest do
     end
   end
 
-  # Installs ConflictResolution for `@scope` the way the adapter does at boot,
-  # over the syn event handler configured at that moment.
+  # Installs the adapter for `@scope` the way a Commanded application does at
+  # boot, over the syn event handler configured at that moment.
   defp install_adapter_over(event_handler) do
     :ok = :syn.set_event_handler(event_handler)
-    :ok = ConflictResolution.install_for_scope(@scope)
+    {:ok, [], _adapter_meta} = SynRegistry.child_spec(@scope, [])
 
     :ok
   end
