@@ -1,12 +1,13 @@
 defmodule Commanded.Registration.SynRegistry.MixProject do
   use Mix.Project
 
+  @version "0.1.0"
   @source_url "https://github.com/Qarma-inspect/commanded_syn_registry"
 
   def project do
     [
       app: :commanded_syn_registry,
-      version: "0.1.0",
+      version: @version,
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -41,14 +42,19 @@ defmodule Commanded.Registration.SynRegistry.MixProject do
   end
 
   defp docs do
-    [main: "readme", extras: ["README.md", "CHANGELOG.md"], source_url: @source_url]
+    [
+      main: "readme",
+      extras: ["README.md", "CHANGELOG.md"],
+      source_url: @source_url,
+      source_ref: "v" <> @version
+    ]
   end
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:commanded, "~> 1.4"},
-      {:syn, "~> 3.4"},
+      {:commanded, ">= 1.4.11 and < 2.0.0"},
+      {:syn, ">= 3.4.2 and < 4.0.0"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false}

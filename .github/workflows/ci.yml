@@ -24,12 +24,16 @@ jobs:
           - elixir: "1.19"
             otp: "28"
             dialyzer: true
+            package: true
+          - elixir: "1.20"
+            otp: "29"
     env:
       MIX_ENV: test
     steps:
       - uses: actions/checkout@v4
 
       - uses: erlef/setup-beam@v1
+        id: beam
         with:
           elixir-version: ${{ matrix.elixir }}
           otp-version: ${{ matrix.otp }}
@@ -39,8 +43,8 @@ jobs:
           path: |
             deps
             _build
-          key: mix-${{ runner.os }}-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('mix.lock') }}
-          restore-keys: mix-${{ runner.os }}-${{ matrix.elixir }}-${{ matrix.otp }}-
+          key: mix-${{ runner.os }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: mix-${{ runner.os }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
 
       - run: mix deps.get
       - run: mix compile --warnings-as-errors
@@ -55,11 +59,25 @@ jobs:
         uses: actions/cache@v4
         with:
           path: _build/dev/*.plt*
-          key: plt-${{ runner.os }}-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('mix.lock') }}
-          restore-keys: plt-${{ runner.os }}-${{ matrix.elixir }}-${{ matrix.otp }}-
+          key: plt-${{ runner.os }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: plt-${{ runner.os }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
 
       - name: Run Dialyzer
         if: matrix.dialyzer
         env:
           MIX_ENV: dev
         run: mix dialyzer
+
+      # ex_doc is a dev-only dependency, so these two run in the dev
+      # environment. mix hex.build checks the package metadata and file list.
+      - name: Build the docs
+        if: matrix.package
+        env:
+          MIX_ENV: dev
+        run: mix docs
+
+      - name: Build the Hex package
+        if: matrix.package
+        env:
+          MIX_ENV: dev
+        run: mix hex.build
