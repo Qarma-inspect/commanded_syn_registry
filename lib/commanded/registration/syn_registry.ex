@@ -97,6 +97,19 @@ defmodule Commanded.Registration.SynRegistry do
 
   @default_failover_delay_range {200, 1_000}
 
+  # A singleton's reaper finds the processes its host started through the
+  # `:parent` item of `Process.info/2`, which OTP 25 added, and the test
+  # suite runs on OTP 26 to 29. The check runs while this module compiles,
+  # so a project on an older release fails to build.
+  @minimum_otp_release 26
+
+  otp_release = System.otp_release()
+
+  if String.to_integer(otp_release) < @minimum_otp_release do
+    raise "commanded_syn_registry requires OTP #{@minimum_otp_release} or later, " <>
+            "but this build runs on OTP #{otp_release}"
+  end
+
   @doc """
   Adds the application's scope to this node and returns the adapter metadata.
 
