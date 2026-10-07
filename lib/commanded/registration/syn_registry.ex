@@ -137,8 +137,7 @@ defmodule Commanded.Registration.SynRegistry do
     :ok = ConflictResolution.install_for_scope(application)
     :ok = :syn.add_node_to_scopes([application])
 
-    {:ok, [],
-     %{application: application, scope: application, failover_delay_range: failover_delay_range}}
+    {:ok, [], %{application: application, scope: application, failover_delay_range: failover_delay_range}}
   end
 
   @doc """
@@ -164,10 +163,9 @@ defmodule Commanded.Registration.SynRegistry do
     registration_name = build_registration_name(adapter_meta, name)
     spec = build_registered_child_spec(child_spec, registration_name)
 
-    start =
-      VanishedHolder.start_with_retry(fn -> DynamicSupervisor.start_child(supervisor, spec) end)
-
-    case start do
+    fn -> DynamicSupervisor.start_child(supervisor, spec) end
+    |> VanishedHolder.start_with_retry()
+    |> case do
       {:error, {:already_started, pid}} when is_pid(pid) -> {:ok, pid}
       reply -> reply
     end
@@ -236,9 +234,7 @@ defmodule Commanded.Registration.SynRegistry do
     Keyword.validate!(config, failover_delay_range: @default_failover_delay_range)
   rescue
     error in ArgumentError ->
-      message =
-        "invalid :registry option for Commanded application #{inspect(application)}: " <>
-          Exception.message(error)
+      message = "invalid :registry option for Commanded application #{inspect(application)}: " <> Exception.message(error)
 
       reraise ArgumentError, message, __STACKTRACE__
   end
@@ -262,8 +258,7 @@ defmodule Commanded.Registration.SynRegistry do
     end
   end
 
-  defp build_registered_child_spec(module, registration_name) when is_atom(module),
-    do: {module, name: registration_name}
+  defp build_registered_child_spec(module, registration_name) when is_atom(module), do: {module, name: registration_name}
 
   defp build_registered_child_spec({module, args}, registration_name)
        when is_atom(module) and is_list(args),

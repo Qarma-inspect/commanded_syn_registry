@@ -29,8 +29,7 @@ defmodule Commanded.Registration.SynRegistry.VanishedHolder do
   returned as it is.
   """
   @spec start_with_retry((-> result)) :: result when result: term()
-  def start_with_retry(start_attempt) when is_function(start_attempt, 0),
-    do: start_with_retry(start_attempt, @max_attempts)
+  def start_with_retry(start_attempt) when is_function(start_attempt, 0), do: start_with_retry(start_attempt, @max_attempts)
 
   defp start_with_retry(start_attempt, attempts_left) do
     case start_attempt.() do

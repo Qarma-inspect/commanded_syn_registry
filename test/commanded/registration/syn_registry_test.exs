@@ -68,11 +68,9 @@ defmodule Commanded.Registration.SynRegistryTest do
       %Incremented{counter_id: counter_id}
     end
 
-    def execute(%Counter{}, %Increment{counter_id: counter_id}),
-      do: %Incremented{counter_id: counter_id}
+    def execute(%Counter{}, %Increment{counter_id: counter_id}), do: %Incremented{counter_id: counter_id}
 
-    def apply(%Counter{count: count} = counter, %Incremented{}),
-      do: %Counter{counter | count: count + 1}
+    def apply(%Counter{count: count} = counter, %Incremented{}), do: %Counter{counter | count: count + 1}
   end
 
   defmodule CounterRouter do
@@ -101,20 +99,15 @@ defmodule Commanded.Registration.SynRegistryTest do
   # Gives up on every counter it sees: rejects the event and asks Commanded to
   # stop the handler.
   defmodule StoppingEventHandler do
-    use Commanded.Event.Handler,
-      application: CommandedApp,
-      name: "syn_registry_test_stopping_handler"
+    use Commanded.Event.Handler, application: CommandedApp, name: "syn_registry_test_stopping_handler"
 
     def handle(%Incremented{}, _metadata), do: {:error, :rejected}
 
-    def error({:error, :rejected}, %Incremented{counter_id: counter_id}, _failure_context),
-      do: {:stop, {:rejected, counter_id}}
+    def error({:error, :rejected}, %Incremented{counter_id: counter_id}, _failure_context), do: {:stop, {:rejected, counter_id}}
   end
 
   defmodule ProcessManager do
-    use Commanded.ProcessManagers.ProcessManager,
-      application: CommandedApp,
-      name: "syn_registry_test_process_manager"
+    use Commanded.ProcessManagers.ProcessManager, application: CommandedApp, name: "syn_registry_test_process_manager"
 
     defstruct []
   end
@@ -127,8 +120,7 @@ defmodule Commanded.Registration.SynRegistryTest do
     def start_link(arg), do: Supervisor.start_link(__MODULE__, arg, name: __MODULE__)
 
     @impl Supervisor
-    def init(_arg),
-      do: Supervisor.init([CommandedApp, EventHandler, ProcessManager], strategy: :one_for_one)
+    def init(_arg), do: Supervisor.init([CommandedApp, EventHandler, ProcessManager], strategy: :one_for_one)
   end
 
   @application __MODULE__.App
@@ -143,24 +135,19 @@ defmodule Commanded.Registration.SynRegistryTest do
 
   describe "child_spec/2" do
     test "starts no process of its own and scopes the registry by application" do
-      assert {:ok, [], %{application: @application, scope: @application}} =
-               SynRegistry.child_spec(@application, [])
+      assert {:ok, [], %{application: @application, scope: @application}} = SynRegistry.child_spec(@application, [])
     end
 
     test "defaults the failover delay range to 200..1000 ms" do
-      assert {:ok, [], %{failover_delay_range: {200, 1_000}}} =
-               SynRegistry.child_spec(@application, [])
+      assert {:ok, [], %{failover_delay_range: {200, 1_000}}} = SynRegistry.child_spec(@application, [])
     end
 
     test "takes the failover delay range from the registry config" do
-      assert {:ok, [], %{failover_delay_range: {50, 75}}} =
-               SynRegistry.child_spec(@application, failover_delay_range: {50, 75})
+      assert {:ok, [], %{failover_delay_range: {50, 75}}} = SynRegistry.child_spec(@application, failover_delay_range: {50, 75})
     end
 
     test "rejects a failover delay range whose minimum exceeds its maximum" do
-      assert_raise ArgumentError, fn ->
-        SynRegistry.child_spec(@application, failover_delay_range: {500, 100})
-      end
+      assert_raise ArgumentError, fn -> SynRegistry.child_spec(@application, failover_delay_range: {500, 100}) end
     end
 
     test "rejects an unknown option, naming the application and the option" do
@@ -199,11 +186,7 @@ defmodule Commanded.Registration.SynRegistryTest do
       %{adapter_meta: adapter_meta} = ctx
 
       assert SynRegistry.supervisor_child_spec(adapter_meta, CommandedTree, :arg) ==
-               %{
-                 id: CommandedTree,
-                 start: {CommandedTree, :start_link, [:arg]},
-                 type: :supervisor
-               }
+               %{id: CommandedTree, start: {CommandedTree, :start_link, [:arg]}, type: :supervisor}
     end
   end
 
@@ -255,10 +238,7 @@ defmodule Commanded.Registration.SynRegistryTest do
     test "passes the start options on to the process", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
 
-      {:ok, host} =
-        SynRegistry.start_link(adapter_meta, name, Singleton, :state,
-          spawn_opt: [priority: :high]
-        )
+      {:ok, host} = SynRegistry.start_link(adapter_meta, name, Singleton, :state, spawn_opt: [priority: :high])
 
       assert Process.info(child_pid(host), :priority) == {:priority, :high}
     end
@@ -282,8 +262,7 @@ defmodule Commanded.Registration.SynRegistryTest do
       %{adapter_meta: adapter_meta, name: name, supervisor: supervisor} = ctx
       {:ok, pid} = SynRegistry.start_child(adapter_meta, name, supervisor, {Aggregate, []})
 
-      assert SynRegistry.start_child(adapter_meta, name, supervisor, {Aggregate, []}) ==
-               {:ok, pid}
+      assert SynRegistry.start_child(adapter_meta, name, supervisor, {Aggregate, []}) == {:ok, pid}
     end
 
     test "registers a process given as a bare module under the name", ctx do
@@ -294,17 +273,10 @@ defmodule Commanded.Registration.SynRegistryTest do
       assert SynRegistry.whereis_name(adapter_meta, name) == pid
     end
 
-    test "registers the process under the syn name even when its arguments carry another name",
-         ctx do
+    test "registers the process under the syn name even when its arguments carry another name", ctx do
       %{adapter_meta: adapter_meta, name: name, supervisor: supervisor} = ctx
 
-      assert {:ok, pid} =
-               SynRegistry.start_child(
-                 adapter_meta,
-                 name,
-                 supervisor,
-                 {Aggregate, name: :ignored_name}
-               )
+      assert {:ok, pid} = SynRegistry.start_child(adapter_meta, name, supervisor, {Aggregate, name: :ignored_name})
 
       assert SynRegistry.whereis_name(adapter_meta, name) == pid
       assert Process.whereis(:ignored_name) == nil
@@ -333,13 +305,7 @@ defmodule Commanded.Registration.SynRegistryTest do
       %{adapter_meta: adapter_meta, name: name, supervisor: supervisor} = ctx
       counter = RefusingProcess.start_counter(2)
 
-      assert {:ok, pid} =
-               SynRegistry.start_child(
-                 adapter_meta,
-                 name,
-                 supervisor,
-                 {RefusingProcess, [counter: counter]}
-               )
+      assert {:ok, pid} = SynRegistry.start_child(adapter_meta, name, supervisor, {RefusingProcess, [counter: counter]})
 
       assert SynRegistry.whereis_name(adapter_meta, name) == pid
       assert RefusingProcess.starts(counter) == 3
@@ -349,12 +315,7 @@ defmodule Commanded.Registration.SynRegistryTest do
       %{adapter_meta: adapter_meta, name: name, supervisor: supervisor} = ctx
       counter = RefusingProcess.start_counter(100)
 
-      assert SynRegistry.start_child(
-               adapter_meta,
-               name,
-               supervisor,
-               {RefusingProcess, [counter: counter]}
-             ) ==
+      assert SynRegistry.start_child(adapter_meta, name, supervisor, {RefusingProcess, [counter: counter]}) ==
                {:error, {:already_started, :undefined}}
 
       assert RefusingProcess.starts(counter) == 5
@@ -363,15 +324,13 @@ defmodule Commanded.Registration.SynRegistryTest do
 
   describe "handle_call/3 and handle_cast/2" do
     test "raise on a call the process has no clause for" do
-      message =
-        "attempted to call GenServer #{inspect(self())} but no handle_call/3 clause was provided"
+      message = "attempted to call GenServer #{inspect(self())} but no handle_call/3 clause was provided"
 
       assert_raise RuntimeError, message, fn -> SynRegistry.handle_call(:request, self(), %{}) end
     end
 
     test "raise on a cast the process has no clause for" do
-      message =
-        "attempted to cast GenServer #{inspect(self())} but no handle_cast/2 clause was provided"
+      message = "attempted to cast GenServer #{inspect(self())} but no handle_cast/2 clause was provided"
 
       assert_raise RuntimeError, message, fn -> SynRegistry.handle_cast(:request, %{}) end
     end
@@ -379,19 +338,13 @@ defmodule Commanded.Registration.SynRegistryTest do
     test "name a registered process by its registered name" do
       Process.register(self(), :syn_registry_test_named_caller)
 
-      call_message =
-        "attempted to call GenServer :syn_registry_test_named_caller but no handle_call/3"
+      call_message = "attempted to call GenServer :syn_registry_test_named_caller but no handle_call/3"
 
-      cast_message =
-        "attempted to cast GenServer :syn_registry_test_named_caller but no handle_cast/2"
+      cast_message = "attempted to cast GenServer :syn_registry_test_named_caller but no handle_cast/2"
 
-      assert_raise RuntimeError, ~r/^#{call_message}/, fn ->
-        SynRegistry.handle_call(:request, self(), %{})
-      end
+      assert_raise RuntimeError, ~r/^#{call_message}/, fn -> SynRegistry.handle_call(:request, self(), %{}) end
 
-      assert_raise RuntimeError, ~r/^#{cast_message}/, fn ->
-        SynRegistry.handle_cast(:request, %{})
-      end
+      assert_raise RuntimeError, ~r/^#{cast_message}/, fn -> SynRegistry.handle_cast(:request, %{}) end
     end
   end
 
@@ -406,13 +359,11 @@ defmodule Commanded.Registration.SynRegistryTest do
       message = {:unexpected, make_ref()}
       state = %{count: 1}
 
-      log =
-        capture_log(fn -> assert SynRegistry.handle_info(message, state) == {:noreply, state} end)
+      log = capture_log(fn -> assert SynRegistry.handle_info(message, state) == {:noreply, state} end)
 
       assert log =~ "[debug]"
 
-      assert log =~
-               "SynRegistry: unexpected message: process=#{inspect(self())} message=#{inspect(message)}"
+      assert log =~ "SynRegistry: unexpected message: process=#{inspect(self())} message=#{inspect(message)}"
     end
 
     test "names a registered process by its registered name in the log" do
@@ -429,11 +380,7 @@ defmodule Commanded.Registration.SynRegistryTest do
       start_supervised!(CommandedTree)
       handler = Registration.whereis_name(CommandedApp, Handler.name(CommandedApp, @handler_name))
 
-      router =
-        Registration.whereis_name(
-          CommandedApp,
-          ProcessRouter.name(CommandedApp, @process_manager_name)
-        )
+      router = Registration.whereis_name(CommandedApp, ProcessRouter.name(CommandedApp, @process_manager_name))
 
       [handler: handler, router: router]
     end
@@ -441,9 +388,7 @@ defmodule Commanded.Registration.SynRegistryTest do
     test "the keyword registry config resolves to the adapter with its scope and failover delay range" do
       adapter = Commanded.Application.registry_adapter(CommandedApp)
 
-      assert {SynRegistry,
-              %{application: CommandedApp, scope: CommandedApp, failover_delay_range: {0, 0}}} =
-               adapter
+      assert {SynRegistry, %{application: CommandedApp, scope: CommandedApp, failover_delay_range: {0, 0}}} = adapter
     end
 
     test "the event handler and the process router are registered under their syn names", ctx do
@@ -454,16 +399,14 @@ defmodule Commanded.Registration.SynRegistryTest do
       assert handler != router
     end
 
-    test "the registered names resolve to the processes inside the supervision tree's singleton hosts",
-         ctx do
+    test "the registered names resolve to the processes inside the supervision tree's singleton hosts", ctx do
       %{handler: handler, router: router} = ctx
 
       assert child_pid(tree_child_pid(EventHandler)) == handler
       assert child_pid(tree_child_pid(ProcessManager)) == router
     end
 
-    test "starting the event handler again yields a proxy and leaves the registered handler in place",
-         ctx do
+    test "starting the event handler again yields a proxy and leaves the registered handler in place", ctx do
       %{handler: handler} = ctx
 
       assert {:ok, host} = EventHandler.start_link()
@@ -471,12 +414,10 @@ defmodule Commanded.Registration.SynRegistryTest do
       assert %SingletonProxy{pid: ^handler} = :sys.get_state(child_pid(host))
       assert Process.alive?(handler)
 
-      assert Registration.whereis_name(CommandedApp, Handler.name(CommandedApp, @handler_name)) ==
-               handler
+      assert Registration.whereis_name(CommandedApp, Handler.name(CommandedApp, @handler_name)) == handler
     end
 
-    test "stopping an event handler started a second time leaves the first one running and registered",
-         ctx do
+    test "stopping an event handler started a second time leaves the first one running and registered", ctx do
       %{handler: handler} = ctx
       {:ok, second_host} = EventHandler.start_link()
 
@@ -484,8 +425,7 @@ defmodule Commanded.Registration.SynRegistryTest do
 
       assert Process.alive?(handler)
 
-      assert Registration.whereis_name(CommandedApp, Handler.name(CommandedApp, @handler_name)) ==
-               handler
+      assert Registration.whereis_name(CommandedApp, Handler.name(CommandedApp, @handler_name)) == handler
     end
 
     test "an event handler that stops from error/3 ends its host with its own reason, and a temporary parent drops the host" do
@@ -518,8 +458,7 @@ defmodule Commanded.Registration.SynRegistryTest do
       counter_id = "syn_registry_test_counter"
       aggregate_name = CommandedAggregate.name(CommandedApp, Counter, counter_id)
 
-      slow_dispatch =
-        Task.async(fn -> CommandedApp.dispatch(%IncrementSlowly{counter_id: counter_id}) end)
+      slow_dispatch = Task.async(fn -> CommandedApp.dispatch(%IncrementSlowly{counter_id: counter_id}) end)
 
       counter = await_registered_counter(counter_id)
       # `GenServer.stop/2` blocks until the aggregate is done with the slow

@@ -121,8 +121,7 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolution do
   # process is started.
   @doc false
   @spec build_registration_metadata(registration_kind()) :: registration_metadata()
-  def build_registration_metadata(kind),
-    do: %{started_at: System.system_time(:nanosecond), kind: kind}
+  def build_registration_metadata(kind), do: %{started_at: System.system_time(:nanosecond), kind: kind}
 
   # Called by the process hosting a singleton when the singleton exits. A lost
   # conflict is registry churn, and the host starts the singleton again; any
@@ -145,14 +144,9 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolution do
     event_handler = fetch_earlier_event_handler()
 
     cond do
-      adapter_scope?(scope) ->
-        keep_first_started(entry, other_entry)
-
-      resolves_conflicts?(event_handler) ->
-        event_handler.resolve_registry_conflict(scope, name, entry, other_entry)
-
-      true ->
-        keep_last_registered(entry, other_entry)
+      adapter_scope?(scope) -> keep_first_started(entry, other_entry)
+      resolves_conflicts?(event_handler) -> event_handler.resolve_registry_conflict(scope, name, entry, other_entry)
+      true -> keep_last_registered(entry, other_entry)
     end
   end
 
@@ -257,8 +251,7 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolution do
 
   defp fetch_earlier_event_handler, do: :persistent_term.get(@earlier_event_handler_key, nil)
 
-  defp resolves_conflicts?(event_handler),
-    do: function_exported?(event_handler, :resolve_registry_conflict, 4)
+  defp resolves_conflicts?(event_handler), do: function_exported?(event_handler, :resolve_registry_conflict, 4)
 
   defp keep_first_started(
          {pid, %{started_at: started_at}, _time},
@@ -306,8 +299,7 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolution do
   defp unregister_without_adapter(scope, name, pid, metadata, reason) do
     event_handler = fetch_earlier_event_handler()
 
-    if kill_conflict_loser?(event_handler, pid, reason),
-      do: Process.exit(pid, {:syn_resolve_kill, name, metadata})
+    if kill_conflict_loser?(event_handler, pid, reason), do: Process.exit(pid, {:syn_resolve_kill, name, metadata})
 
     call_if_exported(event_handler, :on_process_unregistered, [scope, name, pid, metadata, reason])
   end

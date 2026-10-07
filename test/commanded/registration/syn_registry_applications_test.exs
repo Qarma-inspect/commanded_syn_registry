@@ -23,15 +23,11 @@ defmodule Commanded.Registration.SynRegistryApplicationsTest do
   end
 
   defmodule FirstHandler do
-    use Commanded.Event.Handler,
-      application: FirstApp,
-      name: "shared_handler_name"
+    use Commanded.Event.Handler, application: FirstApp, name: "shared_handler_name"
   end
 
   defmodule SecondHandler do
-    use Commanded.Event.Handler,
-      application: SecondApp,
-      name: "shared_handler_name"
+    use Commanded.Event.Handler, application: SecondApp, name: "shared_handler_name"
   end
 
   defmodule Tree do

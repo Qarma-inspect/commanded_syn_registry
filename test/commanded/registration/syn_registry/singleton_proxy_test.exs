@@ -29,8 +29,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxyTest do
 
       {:ok, proxy} = SingletonProxy.start_link(monitored, @name, {10, 20})
 
-      assert %SingletonProxy{pid: ^monitored, name: @name, failover_delay_range: {10, 20}} =
-               :sys.get_state(proxy)
+      assert %SingletonProxy{pid: ^monitored, name: @name, failover_delay_range: {10, 20}} = :sys.get_state(proxy)
 
       assert {:monitored_by, [^proxy]} = Process.info(monitored, :monitored_by)
     end
@@ -48,9 +47,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxyTest do
     test "refuses a failover delay range whose minimum exceeds its maximum", ctx do
       %{monitored: monitored} = ctx
 
-      assert_raise FunctionClauseError, fn ->
-        SingletonProxy.start_link(monitored, @name, {500, 100})
-      end
+      assert_raise FunctionClauseError, fn -> SingletonProxy.start_link(monitored, @name, {500, 100}) end
     end
 
     test "refuses a process identifier that is not a pid" do
@@ -58,9 +55,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxyTest do
       # type checker rejects a literal atom where the spec asks for a pid.
       not_a_pid = Process.get(:no_such_key, :not_a_pid)
 
-      assert_raise FunctionClauseError, fn ->
-        SingletonProxy.start_link(not_a_pid, @name, {0, 0})
-      end
+      assert_raise FunctionClauseError, fn -> SingletonProxy.start_link(not_a_pid, @name, {0, 0}) end
     end
   end
 
@@ -117,10 +112,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxyTest do
       Process.flag(:trap_exit, true)
       {:ok, proxy} = SingletonProxy.start_link(monitored, @name, {0, 0})
 
-      log =
-        capture_log(fn ->
-          stop_monitored_and_await_proxy_exit(monitored, proxy, :noconnection)
-        end)
+      log = capture_log(fn -> stop_monitored_and_await_proxy_exit(monitored, proxy, :noconnection) end)
 
       refute log =~ "terminating"
       refute log =~ "[error]"
@@ -207,31 +199,21 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxyTest do
     end
 
     test "raises for a range whose minimum exceeds its maximum" do
-      assert_raise ArgumentError, ~r/min <= max/, fn ->
-        SingletonProxy.validate_failover_delay_range!({500, 100})
-      end
+      assert_raise ArgumentError, ~r/min <= max/, fn -> SingletonProxy.validate_failover_delay_range!({500, 100}) end
     end
 
     test "raises for a negative minimum" do
-      assert_raise ArgumentError, fn ->
-        SingletonProxy.validate_failover_delay_range!({-1, 100})
-      end
+      assert_raise ArgumentError, fn -> SingletonProxy.validate_failover_delay_range!({-1, 100}) end
     end
 
     test "raises for bounds that are not integers" do
-      assert_raise ArgumentError, fn ->
-        SingletonProxy.validate_failover_delay_range!({1.0, 2})
-      end
+      assert_raise ArgumentError, fn -> SingletonProxy.validate_failover_delay_range!({1.0, 2}) end
 
-      assert_raise ArgumentError, fn ->
-        SingletonProxy.validate_failover_delay_range!({1, 2.0})
-      end
+      assert_raise ArgumentError, fn -> SingletonProxy.validate_failover_delay_range!({1, 2.0}) end
     end
 
     test "raises for a value that is not a pair" do
-      assert_raise ArgumentError, fn ->
-        SingletonProxy.validate_failover_delay_range!({1, 2, 3})
-      end
+      assert_raise ArgumentError, fn -> SingletonProxy.validate_failover_delay_range!({1, 2, 3}) end
 
       assert_raise ArgumentError, fn -> SingletonProxy.validate_failover_delay_range!(200) end
     end
@@ -239,9 +221,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxyTest do
     test "shows the rejected value in the message" do
       message = "got: {:bad, :range}"
 
-      assert_raise ArgumentError, ~r/#{message}/, fn ->
-        SingletonProxy.validate_failover_delay_range!({:bad, :range})
-      end
+      assert_raise ArgumentError, ~r/#{message}/, fn -> SingletonProxy.validate_failover_delay_range!({:bad, :range}) end
     end
   end
 

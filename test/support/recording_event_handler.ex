@@ -42,8 +42,7 @@ defmodule Commanded.Registration.SynRegistry.RecordingEventHandler do
   end
 
   @impl :syn_event_handler
-  def on_process_left(scope, group, pid, metadata, reason),
-    do: report(:on_process_left, [scope, group, pid, metadata, reason])
+  def on_process_left(scope, group, pid, metadata, reason), do: report(:on_process_left, [scope, group, pid, metadata, reason])
 
   @impl :syn_event_handler
   def resolve_registry_conflict(scope, name, entry, other_entry) do

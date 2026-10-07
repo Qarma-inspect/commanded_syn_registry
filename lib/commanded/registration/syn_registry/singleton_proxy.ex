@@ -34,12 +34,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxy do
   @enforce_keys [:pid, :name, :monitor_ref, :failover_delay_range]
   defstruct [:pid, :name, :monitor_ref, :failover_delay_range]
 
-  @type t :: %__MODULE__{
-          pid: pid(),
-          name: term(),
-          monitor_ref: reference(),
-          failover_delay_range: failover_delay_range()
-        }
+  @type t :: %__MODULE__{pid: pid(), name: term(), monitor_ref: reference(), failover_delay_range: failover_delay_range()}
 
   defguardp is_valid_failover_delay_range(range)
             when is_tuple(range) and tuple_size(range) == 2 and
@@ -51,8 +46,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxy do
   `name`, and exits between `min_ms` and `max_ms` after that process goes
   down.
   """
-  @spec start_link(holder :: pid(), name :: term(), failover_delay_range()) ::
-          GenServer.on_start()
+  @spec start_link(holder :: pid(), name :: term(), failover_delay_range()) :: GenServer.on_start()
   def start_link(pid, name, failover_delay_range)
       when is_pid(pid) and is_valid_failover_delay_range(failover_delay_range) do
     GenServer.start_link(__MODULE__, {pid, name, failover_delay_range})
@@ -62,20 +56,11 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxy do
   def init({pid, name, failover_delay_range}) do
     ref = Process.monitor(pid)
 
-    {:ok,
-     %__MODULE__{
-       pid: pid,
-       name: name,
-       monitor_ref: ref,
-       failover_delay_range: failover_delay_range
-     }}
+    {:ok, %__MODULE__{pid: pid, name: name, monitor_ref: ref, failover_delay_range: failover_delay_range}}
   end
 
   @impl GenServer
-  def handle_info(
-        {:DOWN, ref, :process, pid, reason},
-        %__MODULE__{monitor_ref: ref, pid: pid} = state
-      ) do
+  def handle_info({:DOWN, ref, :process, pid, reason}, %__MODULE__{monitor_ref: ref, pid: pid} = state) do
     delay_ms = draw_failover_delay(state.failover_delay_range)
 
     log_singleton_down(state.name, pid, reason, delay_ms)

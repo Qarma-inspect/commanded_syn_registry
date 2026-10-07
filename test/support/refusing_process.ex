@@ -31,8 +31,7 @@ defmodule Commanded.Registration.SynRegistry.RefusingProcess do
   Makes the next `refusals` starts against `counter` fail.
   """
   @spec refuse_next_starts(counter(), non_neg_integer()) :: :ok
-  def refuse_next_starts(counter, refusals),
-    do: Agent.update(counter, &%{&1 | refusals_left: refusals})
+  def refuse_next_starts(counter, refusals), do: Agent.update(counter, &%{&1 | refusals_left: refusals})
 
   @doc """
   Returns how many times a process was started against `counter`.
@@ -55,7 +54,9 @@ defmodule Commanded.Registration.SynRegistry.RefusingProcess do
   def init(counter) do
     refuse? = Agent.get_and_update(counter, &count_start/1)
 
-    if refuse?, do: {:stop, {:already_started, :undefined}}, else: {:ok, counter}
+    if refuse?,
+      do: {:stop, {:already_started, :undefined}},
+      else: {:ok, counter}
   end
 
   defp count_start(%{refusals_left: left, starts: starts} = state) when left > 0,

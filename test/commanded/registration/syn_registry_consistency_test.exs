@@ -62,10 +62,7 @@ defmodule Commanded.Registration.SynRegistryConsistencyTest do
   end
 
   defmodule StrongHandler do
-    use Commanded.Event.Handler,
-      application: App,
-      name: "syn_registry_consistency_test_handler",
-      consistency: :strong
+    use Commanded.Event.Handler, application: App, name: "syn_registry_consistency_test_handler", consistency: :strong
 
     def handle(%Requested{order_id: order_id}, _metadata) do
       result = App.dispatch(%Follow{order_id: order_id}, consistency: :strong)
@@ -113,9 +110,7 @@ defmodule Commanded.Registration.SynRegistryConsistencyTest do
     end
   end
 
-  defp restore_consistency_timeout(nil),
-    do: Application.delete_env(:commanded, :dispatch_consistency_timeout)
+  defp restore_consistency_timeout(nil), do: Application.delete_env(:commanded, :dispatch_consistency_timeout)
 
-  defp restore_consistency_timeout(timeout),
-    do: Application.put_env(:commanded, :dispatch_consistency_timeout, timeout)
+  defp restore_consistency_timeout(timeout), do: Application.put_env(:commanded, :dispatch_consistency_timeout, timeout)
 end

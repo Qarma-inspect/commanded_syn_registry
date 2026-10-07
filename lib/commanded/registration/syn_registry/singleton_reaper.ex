@@ -59,11 +59,9 @@ defmodule Commanded.Registration.SynRegistry.SingletonReaper do
   The reaper monitors the host before this returns, so the host may start its
   singleton right after.
   """
-  @spec start_monitor(scope :: atom(), name :: term()) ::
-          {reaper :: pid(), reaper_ref :: reference()}
+  @spec start_monitor(scope :: atom(), name :: term()) :: {reaper :: pid(), reaper_ref :: reference()}
   def start_monitor(scope, name) do
-    {{:ok, reaper}, reaper_ref} =
-      :proc_lib.start_monitor(__MODULE__, :init, [self(), scope, name])
+    {{:ok, reaper}, reaper_ref} = :proc_lib.start_monitor(__MODULE__, :init, [self(), scope, name])
 
     {reaper, reaper_ref}
   end
@@ -106,14 +104,9 @@ defmodule Commanded.Registration.SynRegistry.SingletonReaper do
   # the state of the last start before the host's `DOWN`.
   defp await_host_down(%__MODULE__{host_ref: host_ref} = state) do
     receive do
-      :starting ->
-        await_host_down(%__MODULE__{state | starting?: true})
-
-      {:guard, singleton} ->
-        await_host_down(%__MODULE__{state | singleton: singleton, starting?: false})
-
-      {:DOWN, ^host_ref, :process, _host, _reason} ->
-        kill_singletons_of_host(state)
+      :starting -> await_host_down(%__MODULE__{state | starting?: true})
+      {:guard, singleton} -> await_host_down(%__MODULE__{state | singleton: singleton, starting?: false})
+      {:DOWN, ^host_ref, :process, _host, _reason} -> kill_singletons_of_host(state)
     end
   end
 

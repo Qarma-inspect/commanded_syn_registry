@@ -133,9 +133,10 @@ defmodule Commanded.Registration.SynRegistry.SingletonHost do
       failover_delay_range: Map.fetch!(adapter_meta, :failover_delay_range)
     }
 
-    state = start_reaper(state)
-
-    case start_child(state) do
+    state
+    |> start_reaper()
+    |> start_child()
+    |> case do
       {:ok, state} -> {:ok, state}
       {:error, reason} -> {:stop, {:shutdown, {:failed_to_start_child, module, reason}}}
     end
@@ -146,14 +147,11 @@ defmodule Commanded.Registration.SynRegistry.SingletonHost do
   # that walks the supervision tree finds the singleton or its proxy. It
   # refuses every other request.
   @impl GenServer
-  def handle_call(:which_children, _from, %__MODULE__{} = state),
-    do: {:reply, [describe_child(state)], state}
+  def handle_call(:which_children, _from, %__MODULE__{} = state), do: {:reply, [describe_child(state)], state}
 
-  def handle_call(:count_children, _from, %__MODULE__{} = state),
-    do: {:reply, count_children(state), state}
+  def handle_call(:count_children, _from, %__MODULE__{} = state), do: {:reply, count_children(state), state}
 
-  def handle_call(_request, _from, %__MODULE__{} = state),
-    do: {:reply, {:error, :not_supported}, state}
+  def handle_call(_request, _from, %__MODULE__{} = state), do: {:reply, {:error, :not_supported}, state}
 
   @impl GenServer
   def handle_info({:EXIT, child, reason}, %__MODULE__{child: child} = state) do
@@ -162,8 +160,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHost do
       else: exit_with(state, reason)
   end
 
-  def handle_info({:start_child_again, refusal}, %__MODULE__{child: nil} = state),
-    do: restart_child(state, refusal)
+  def handle_info({:start_child_again, refusal}, %__MODULE__{child: nil} = state), do: restart_child(state, refusal)
 
   def handle_info({:DOWN, ref, :process, _reaper, _reason}, %__MODULE__{reaper_ref: ref} = state),
     do: {:noreply, guard_with_new_reaper(state)}
@@ -229,18 +226,15 @@ defmodule Commanded.Registration.SynRegistry.SingletonHost do
 
   # A proxy does not trap exits and dies with the host, so only the singleton
   # needs the reaper.
-  defp guard_singleton(%__MODULE__{child_role: :singleton} = state),
-    do: SingletonReaper.guard(state.reaper, state.child)
+  defp guard_singleton(%__MODULE__{child_role: :singleton} = state), do: SingletonReaper.guard(state.reaper, state.child)
 
   defp guard_singleton(%__MODULE__{}), do: :ok
 
   # Ends the start announced to the reaper, guarding the singleton if the
   # start produced one.
-  defp report_start_to_reaper(%__MODULE__{} = state, {:ok, singleton}),
-    do: SingletonReaper.guard(state.reaper, singleton)
+  defp report_start_to_reaper(%__MODULE__{} = state, {:ok, singleton}), do: SingletonReaper.guard(state.reaper, singleton)
 
-  defp report_start_to_reaper(%__MODULE__{} = state, {:error, _reason}),
-    do: SingletonReaper.guard(state.reaper, nil)
+  defp report_start_to_reaper(%__MODULE__{} = state, {:error, _reason}), do: SingletonReaper.guard(state.reaper, nil)
 
   # The registration carries the time the process is started and marks it as
   # a singleton, which is what `ConflictResolution` reads when the same name
@@ -256,8 +250,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHost do
   # lost its name in a conflict.
   defp registry_churn?(%__MODULE__{child_role: :proxy}, _reason), do: true
 
-  defp registry_churn?(%__MODULE__{child_role: :singleton}, reason),
-    do: ConflictResolution.singleton_conflict_loss?(reason)
+  defp registry_churn?(%__MODULE__{child_role: :singleton}, reason), do: ConflictResolution.singleton_conflict_loss?(reason)
 
   defp restart_child(%__MODULE__{} = state, reason) do
     now_ms = System.monotonic_time(:millisecond)
@@ -270,8 +263,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHost do
       else: start_child_again(state, reason)
   end
 
-  defp within_restart_window?(restarted_at_ms, now_ms),
-    do: now_ms - restarted_at_ms < @registry_restart_window_ms
+  defp within_restart_window?(restarted_at_ms, now_ms), do: now_ms - restarted_at_ms < @registry_restart_window_ms
 
   defp start_child_again(%__MODULE__{} = state, reason) do
     log_registry_restart(state, reason)
@@ -340,19 +332,15 @@ defmodule Commanded.Registration.SynRegistry.SingletonHost do
     end
   end
 
-  defp describe_child(%__MODULE__{child_role: :singleton} = state),
-    do: {state.module, state.child, :worker, [state.module]}
+  defp describe_child(%__MODULE__{child_role: :singleton} = state), do: {state.module, state.child, :worker, [state.module]}
 
-  defp describe_child(%__MODULE__{child_role: :proxy} = state),
-    do: {state.module, state.child, :worker, [SingletonProxy]}
+  defp describe_child(%__MODULE__{child_role: :proxy} = state), do: {state.module, state.child, :worker, [SingletonProxy]}
 
-  defp describe_child(%__MODULE__{child_role: nil} = state),
-    do: {state.module, :restarting, :worker, [state.module]}
+  defp describe_child(%__MODULE__{child_role: nil} = state), do: {state.module, :restarting, :worker, [state.module]}
 
   # One worker, counted as active unless the host is between attempts to
   # start it again.
-  defp count_children(%__MODULE__{child: nil}),
-    do: [specs: 1, active: 0, supervisors: 0, workers: 1]
+  defp count_children(%__MODULE__{child: nil}), do: [specs: 1, active: 0, supervisors: 0, workers: 1]
 
   defp count_children(%__MODULE__{}), do: [specs: 1, active: 1, supervisors: 0, workers: 1]
 

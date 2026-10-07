@@ -35,14 +35,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
   end
 
   test "the singleton started first keeps the name once the nodes meet", ctx do
-    %{
-      peer_a: peer_a,
-      peer_b: peer_b,
-      node_b: node_b,
-      registry_a: registry_a,
-      registry_b: registry_b,
-      name: name
-    } = ctx
+    %{peer_a: peer_a, peer_b: peer_b, node_b: node_b, registry_a: registry_a, registry_b: registry_b, name: name} = ctx
 
     host_a = call(peer_a, :start_singleton, [registry_a, name])
     Process.sleep(20)
@@ -62,14 +55,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
   end
 
   test "the aggregate started first keeps the name once the nodes meet", ctx do
-    %{
-      peer_a: peer_a,
-      peer_b: peer_b,
-      node_b: node_b,
-      registry_a: registry_a,
-      registry_b: registry_b,
-      name: name
-    } = ctx
+    %{peer_a: peer_a, peer_b: peer_b, node_b: node_b, registry_a: registry_a, registry_b: registry_b, name: name} = ctx
 
     aggregate_a = call(peer_a, :start_aggregate, [registry_a, name])
     Process.sleep(20)
@@ -85,14 +71,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
   end
 
   test "the proxying node hosts the singleton after the hosting node goes away", ctx do
-    %{
-      peer_a: peer_a,
-      peer_b: peer_b,
-      node_b: node_b,
-      registry_a: registry_a,
-      registry_b: registry_b,
-      name: name
-    } = ctx
+    %{peer_a: peer_a, peer_b: peer_b, node_b: node_b, registry_a: registry_a, registry_b: registry_b, name: name} = ctx
 
     assert call(peer_a, :connect, [node_b])
     host_a = call(peer_a, :start_singleton, [registry_a, name])
@@ -108,8 +87,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
     assert call(peer_b, :alive?, [host_b])
   end
 
-  test "a reaper whose host is killed leaves a name held on another node alone and ends normally",
-       ctx do
+  test "a reaper whose host is killed leaves a name held on another node alone and ends normally", ctx do
     %{peer_a: peer_a, peer_b: peer_b, node_b: node_b, name: name} = ctx
 
     holder = call(peer_b, :register_in_host_scope, [@host_scope, name, :metadata])
@@ -123,8 +101,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
     assert call(peer_b, :alive?, [holder])
   end
 
-  test "a conflict in a scope of the host keeps the later registration and kills the other process, as syn does",
-       ctx do
+  test "a conflict in a scope of the host keeps the later registration and kills the other process, as syn does", ctx do
     %{peer_a: peer_a, peer_b: peer_b, node_b: node_b, name: name} = ctx
 
     assert_syn_rule_decides_host_conflict(peer_a, peer_b, node_b, name)
@@ -133,16 +110,14 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
   # A node where syn's configuration names the adapter's handler before any
   # Commanded application starts has no earlier handler to pass scopes to.
   @tag earlier_event_handler: ConflictResolution
-  test "a conflict in a scope of the host goes to syn's rule when the configuration names the adapter's handler",
-       ctx do
+  test "a conflict in a scope of the host goes to syn's rule when the configuration names the adapter's handler", ctx do
     %{peer_a: peer_a, peer_b: peer_b, node_b: node_b, name: name} = ctx
 
     assert_syn_rule_decides_host_conflict(peer_a, peer_b, node_b, name)
   end
 
   @tag earlier_event_handler: RecordingEventHandler
-  test "a conflict in a scope of the host goes to the event handler installed before the adapter",
-       ctx do
+  test "a conflict in a scope of the host goes to the event handler installed before the adapter", ctx do
     %{peer_a: peer_a, peer_b: peer_b, node_b: node_b, name: name} = ctx
 
     process_a = call(peer_a, :register_in_host_scope, [@host_scope, name, :metadata_a])
@@ -151,8 +126,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
     :ok = call(peer_b, :watch_exit, [process_b])
 
     unregistration =
-      {RecordingEventHandler, :on_process_unregistered,
-       [@host_scope, name, process_b, :metadata_b, :syn_conflict_resolution]}
+      {RecordingEventHandler, :on_process_unregistered, [@host_scope, name, process_b, :metadata_b, :syn_conflict_resolution]}
 
     assert call(peer_a, :connect, [node_b])
 
@@ -167,8 +141,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
     assert call(peer_b, :alive?, [process_b])
   end
 
-  test "a process on another node that lost a conflict in a scope of the host is left to its own node",
-       ctx do
+  test "a process on another node that lost a conflict in a scope of the host is left to its own node", ctx do
     %{peer_a: peer_a, peer_b: peer_b, node_b: node_b, name: name} = ctx
     assert call(peer_a, :connect, [node_b])
     process_b = call(peer_b, :register_in_host_scope, [@host_scope, name, :metadata_b])
@@ -207,13 +180,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
   defp start_peer(suffix) do
     name = :"syn_registry_#{suffix}_#{System.unique_integer([:positive])}"
 
-    peer_options = %{
-      name: name,
-      host: ~c"127.0.0.1",
-      longnames: true,
-      connection: :standard_io,
-      args: peer_args()
-    }
+    peer_options = %{name: name, host: ~c"127.0.0.1", longnames: true, connection: :standard_io, args: peer_args()}
 
     {:ok, peer, node} = :peer.start_link(peer_options)
     # Every restart and every lost connection these tests provoke is reported
@@ -235,8 +202,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
 
   defp call(peer, function, args), do: :peer.call(peer, ClusterTestNode, function, args)
 
-  defp await_call(peer, function, args, expected),
-    do: await_call(peer, function, args, expected, poll_deadline())
+  defp await_call(peer, function, args, expected), do: await_call(peer, function, args, expected, poll_deadline())
 
   defp await_call(peer, function, args, expected, deadline) do
     result = call(peer, function, args)
@@ -254,8 +220,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
     end
   end
 
-  defp await_child(peer, host, expected_kind),
-    do: await_child(peer, host, expected_kind, poll_deadline())
+  defp await_child(peer, host, expected_kind), do: await_child(peer, host, expected_kind, poll_deadline())
 
   defp await_child(peer, host, expected_kind, deadline) do
     child = call(peer, :child, [host])

@@ -78,16 +78,9 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
   another node, lost `name` in a conflict in `scope`, as syn does on every
   node that learns of the loss.
   """
-  @spec report_conflict_loss(scope :: atom(), name :: term(), loser :: pid(), metadata :: term()) ::
-          term()
+  @spec report_conflict_loss(scope :: atom(), name :: term(), loser :: pid(), metadata :: term()) :: term()
   def report_conflict_loss(scope, name, pid, metadata) do
-    ConflictResolution.on_process_unregistered(
-      scope,
-      name,
-      pid,
-      metadata,
-      :syn_conflict_resolution
-    )
+    ConflictResolution.on_process_unregistered(scope, name, pid, metadata, :syn_conflict_resolution)
   end
 
   @doc """
@@ -100,13 +93,11 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
   Starts syn on this node, adds the application's scope and returns the
   adapter metadata the other functions here take.
   """
-  @spec start_registry(module(), SingletonProxy.failover_delay_range()) ::
-          SingletonHost.adapter_meta()
+  @spec start_registry(module(), SingletonProxy.failover_delay_range()) :: SingletonHost.adapter_meta()
   def start_registry(application, failover_delay_range) do
     {:ok, _started} = Application.ensure_all_started(:syn)
 
-    {:ok, [], adapter_meta} =
-      SynRegistry.child_spec(application, failover_delay_range: failover_delay_range)
+    {:ok, [], adapter_meta} = SynRegistry.child_spec(application, failover_delay_range: failover_delay_range)
 
     adapter_meta
   end
@@ -132,8 +123,7 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
     {:ok, supervisor} = DynamicSupervisor.start_link(strategy: :one_for_one)
     Process.unlink(supervisor)
 
-    {:ok, pid} =
-      SynRegistry.start_child(adapter_meta, name, supervisor, {ClusterTestSingleton, []})
+    {:ok, pid} = SynRegistry.start_child(adapter_meta, name, supervisor, {ClusterTestSingleton, []})
 
     pid
   end
