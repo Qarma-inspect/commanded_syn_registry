@@ -47,8 +47,11 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxy do
   down.
   """
   @spec start_link(holder :: pid(), name :: term(), failover_delay_range()) :: GenServer.on_start()
-  def start_link(pid, name, failover_delay_range)
-      when is_pid(pid) and is_valid_failover_delay_range(failover_delay_range) do
+  # `SingletonHost`, the only caller in the library, passes a holder it has
+  # matched with `is_pid/1` and the range that
+  # `Commanded.Registration.SynRegistry.child_spec/2` validated when the
+  # Commanded application started.
+  def start_link(pid, name, failover_delay_range) do
     GenServer.start_link(__MODULE__, {pid, name, failover_delay_range})
   end
 

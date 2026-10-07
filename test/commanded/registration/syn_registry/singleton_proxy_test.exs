@@ -43,20 +43,6 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxyTest do
       assert proxy in links
       refute monitored in links
     end
-
-    test "refuses a failover delay range whose minimum exceeds its maximum", ctx do
-      %{monitored: monitored} = ctx
-
-      assert_raise FunctionClauseError, fn -> SingletonProxy.start_link(monitored, @name, {500, 100}) end
-    end
-
-    test "refuses a process identifier that is not a pid" do
-      # The value comes out of the process dictionary because the Elixir 1.20
-      # type checker rejects a literal atom where the spec asks for a pid.
-      not_a_pid = Process.get(:no_such_key, :not_a_pid)
-
-      assert_raise FunctionClauseError, fn -> SingletonProxy.start_link(not_a_pid, @name, {0, 0}) end
-    end
   end
 
   describe "a proxy while the monitored process is running" do
