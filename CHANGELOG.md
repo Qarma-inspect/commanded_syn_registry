@@ -8,7 +8,8 @@ Initial release.
   keeps the names of aggregates, event handlers and process managers in syn,
   one scope per Commanded application.
 - Each event handler and process manager runs on one node of the cluster at
-  a time. The other nodes proxy it and take over when it stops.
+  a time. The other nodes proxy it and take it over when its node stops or
+  is lost; its own exits reach the supervisors on every node.
 - When a network partition heals and a name turns up on two nodes, the older
   registration keeps it.
 - Requires Elixir 1.15 or later, OTP 26 or later, `commanded` 1.4.11 or later

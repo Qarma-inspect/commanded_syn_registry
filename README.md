@@ -73,7 +73,8 @@ registry: [adapter: Commanded.Registration.SynRegistry, failover_delay_range: {2
 
 `:failover_delay_range` is the only option. It bounds, in milliseconds, the
 random delay a node waits before it tries to take over a singleton whose
-process has gone down (see [Failover](#failover)). The value is a
+process went down with its node, was stopped by it, was already gone, or
+lost a name conflict (see [Failover](#failover)). The value is a
 `{min_ms, max_ms}` tuple of non-negative integers with `min_ms <= max_ms`,
 and the default is `{200, 1_000}`. An invalid range, a key the adapter does
 not know, or a key given twice raises `ArgumentError` naming the application
@@ -124,19 +125,34 @@ runs a single child and decides what it is each time it starts one:
 A start that syn refuses for a holder that has already gone is retried the
 same way as for aggregates.
 
-The host starts its child again only for registry churn: the proxy exited
-because the process holding the name went down, the handler lost its name
-in a conflict (see [Network partitions](#network-partitions)), or syn
+The host starts its child again only for registry churn: the handler lost
+its name in a conflict (see [Network partitions](#network-partitions)); syn
 refused a restart, past the attempts above, because the name still points
-at a process that has already exited. Those restarts have a budget of their
-own; see [Failover](#failover). Every other exit of the handler, a crash,
-`:normal` or the stop its `error/3` callback asked for, ends the host with
-the handler's exact reason, so the restart type and restart intensity of
-the supervisor you put the handler under apply as if it supervised the
-handler directly. A handler that fails to start at the first start makes
-`start_link/5` return
-`{:error, {:shutdown, {:failed_to_start_child, module, reason}}}`; at a
-restart the host ends with `reason` itself.
+at a process that has already exited; or the proxy saw the holder go down
+with a reason that means its node is lost or stopping (`:noconnection`,
+`:shutdown`, `:killed`), that the name pointed at a process that was
+already gone (`:noproc`), or that the holder lost a conflict
+(`{:shutdown, :name_conflict}`). Those restarts have a budget of their own;
+see [Failover](#failover). Every other exit of the handler, a crash,
+`:normal` or the `{:stop, reason}` its `error/3` callback asked for, ends
+the host with the handler's exact reason on every node: on the node that
+ran the handler, and on every node that proxied it, where the proxy passes
+the reason on at once. The restart type and restart intensity of the
+supervisor you put the handler under therefore apply on every node, as they
+do with Commanded's `:global` adapter, with one exception: a handler that
+stops with one of the five reasons above, `:shutdown`, `:killed`,
+`:noproc`, `:noconnection` or `{:shutdown, :name_conflict}`, is read as
+stopped by its node or moved by the registry. The parents on the other
+nodes do not see that stop: those nodes proxy the handler's replacement
+when one holds the name by the end of their failover delay, and take the
+name over when none does. Stop a handler deliberately with
+`{:stop, {:shutdown, reason}}`, where `reason` is anything but
+`:name_conflict`, the adapter's own reason for a lost conflict; that stop
+reaches every parent. See [Supervising handlers](#supervising-handlers).
+
+A handler that fails to start at the first start makes `start_link/5`
+return `{:error, {:shutdown, {:failed_to_start_child, module, reason}}}`;
+at a restart the host ends with `reason` itself.
 
 Process manager instances run under their router on the node that hosts it
 and are not registered. An event handler started with `concurrency: n` is
@@ -149,15 +165,22 @@ pid, is the host's. This matters in one place; see
 
 ### Failover
 
-When the process holding a name goes down, every proxy for it receives the
+When the process holding a name goes down with its node or is stopped by it
+(`:noconnection`, `:shutdown`, `:killed`), and when the holder lost a
+conflict (`{:shutdown, :name_conflict}`), every proxy for it receives the
 monitor's `:DOWN` message, waits a delay drawn uniformly from
-`:failover_delay_range`, and exits with the same reason the holder had. Its
-host starts its child again, which tries to register the name: the first
-node to get there hosts the handler, and the nodes that arrive later find the
-name taken and proxy the new holder. The delay spreads the attempts out in
-time, so most nodes find the name taken instead of clashing over it. Two
-nodes that do register the same name at once are sorted out the way a
-partition is (below), and the loser becomes a proxy.
+`:failover_delay_range`, and exits with the same reason the holder had. A
+proxy started for a name that pointed at a process already gone gets
+`:noproc` at once and spends the same delay looking the name up every
+10 ms: when another process takes the name within the delay, the proxy
+monitors that one instead, and otherwise it exits with `:noproc` as the
+delay runs out. After either exit the host starts its child again, which
+tries to register the name: the first node to get there hosts the handler,
+and the nodes that arrive later find the name taken and proxy the new
+holder. The delay spreads the attempts out in time, so most nodes find the
+name taken instead of clashing over it. Two nodes that do register the same
+name at once are sorted out the way a partition is (below), and the loser
+becomes a proxy.
 
 When the hosting node is lost rather than the process, the proxies get
 `:noconnection`, and syn removes the departed node's names as soon as its
@@ -167,18 +190,46 @@ the name still pointing at the dead process, starts a proxy for it, gets
 delay. The same loop runs when the process dies on a node that stays up and
 that node's scope process is slow to report the exit: until the report
 arrives, the local table keeps the dead pid, and the proxy started for it
-gets `:noproc` at once. Each host allows 30 restarts for registry churn in
-5 seconds, which is above the rate this loop reaches with the default
-minimum delay of 200 ms. Delays that average under about 170 ms let the
-loop outrun the budget while the stale entry remains. Past the budget the
-host logs an error and exits with `{:too_many_registry_restarts, name}`,
-which its parent handles under its own restart policy. A crash loop of the
-handler never touches this budget: a crash ends the host with the crash
-reason, and the parent's restart intensity decides.
+gets `:noproc` at once. This loop ends without a restart when the holder's
+node registers a replacement within the delay: one of the proxy's lookups
+finds it, and the proxy monitors it. Each host allows 30 restarts for
+registry churn in 5 seconds, which is above the rate this loop reaches
+with the default minimum delay of 200 ms. Delays that average under about
+170 ms let the loop outrun the budget while the stale entry remains. Past
+the budget the host logs an error and exits with
+`{:too_many_registry_restarts, name}`, which its parent handles under its
+own restart policy. A crash loop of the handler never touches this budget:
+a crash ends the host with the crash reason, and the parent's restart
+intensity decides.
 
-A proxy's exit is followed by a restart whatever the holder's exit reason
-was. A handler that stops itself on one node is therefore started once on
-each other node, where the parent applies its own restart policy in turn.
+A graceful stop of the hosting node, through `System.stop/1`,
+`:init.stop/0` or the default handling of `SIGTERM`, stops its applications
+before it closes its connections, so the proxies see the handler's
+`:shutdown`, or `:killed` when the handler was still in a callback as the
+supervisor's shutdown value ran out, and the name moves to another node
+before the stopping node is gone. `:noconnection` means the node went away
+without stopping: a crash of the VM, a kill of the OS process, or a lost
+network.
+
+Any other exit of the holder is its own: a crash, `:normal`, or the
+`{:stop, reason}` its `error/3` asked for. The proxy passes it on at once,
+without the delay, its host ends with that reason, and the parent on that
+node applies its restart type, as the parent on the node that ran the
+handler does. Each parent counts every exit of the handler while its node's
+proxy monitors the current holder. After a passed-on exit, a node whose
+table still names the dead holder catches up with the replacement within
+about 10 ms of the replacement's registration reaching it, through the
+lookups described above; a replacement that exits before that is not
+counted on that node. A handler that fails on the same event after every
+start is therefore restarted and counted by every parent, each over its own
+`max_seconds`, the window in which a supervisor counts restarts.
+`:permanent` parents with the same intensity that saw every exit run out of
+it in the same round as long as the exits come well within that window. A
+parent that missed an exit stops later than the others, if at all: it
+keeps restarting the handler after they have stopped for as long as the
+handler's exits then come too far apart to fill its window;
+[Supervising handlers](#supervising-handlers) says how to keep that
+contained.
 
 The parent's shutdown value, a timeout, `:brutal_kill` or `:infinity`,
 decides how long a handler gets to stop: the host passes the shutdown on to
@@ -189,6 +240,64 @@ or still starting, and its name is released.
 A takeover happens at least `min_ms` after the holder went down. A lower
 range makes takeovers faster and clashes more likely; a higher range does
 the opposite.
+
+### Supervising handlers
+
+Commanded builds every handler's child spec with `restart: :permanent`, and
+the host is what that spec starts. A handler that keeps failing on one
+event under `:permanent` parents is restarted by every node's parent until
+their restart intensities run out, in the same round on every node apart
+from the exits a node can miss (see [Failover](#failover)), and the exit
+then climbs each supervision tree; on a tree with default intensities that
+can stop the application on every node at about the same time. Commanded's
+`:global` adapter behaves the same way. Two plain OTP settings keep it
+contained.
+
+Stop deliberately with `{:stop, {:shutdown, reason}}` from `error/3`, and
+give the handler `restart: :transient`:
+
+```elixir
+children = [
+  Supervisor.child_spec(MyApp.MyHandler, restart: :transient)
+]
+```
+
+A `:transient` child that exits with `{:shutdown, reason}` is not
+restarted: the supervisor keeps its spec with no process behind it, counts
+nothing against its intensity and writes no supervisor report, and a
+`GenServer` writes no crash report for that reason either. With this
+adapter the proxies pass the reason on at once, so the same happens on
+every node, and the handler stays stopped in the whole cluster after one
+handling; `Supervisor.restart_child/2` brings it back by hand. Crashes
+still restart, on every node. The reason has to be a `{:shutdown, term}`
+tuple other than `{:shutdown, :name_conflict}`: the other nodes read a bare
+`:shutdown`, `:killed`, `:noproc` or `:noconnection` as the holder's node
+stopping it or as a stale registry entry, `{:shutdown, :name_conflict}` as
+a lost conflict, and on any of the five the handler keeps running, started
+again on its own node or taken over by another. `Supervisor.child_spec/2`
+overrides the `restart` of a handler with `concurrency: 1`, the default;
+with a higher concurrency Commanded starts a supervisor of its own whose
+workers are `:permanent`, and the override reaches only that supervisor.
+
+Put the handlers under a supervisor of their own, and make that supervisor
+`:transient` under the application supervisor:
+
+```elixir
+children = [
+  MyApp.CommandedApp,
+  Supervisor.child_spec(MyApp.HandlerSupervisor, restart: :transient)
+]
+```
+
+A supervisor that runs out of restart intensity exits with `:shutdown`.
+Under `:transient` or `:temporary` its parent neither restarts it nor
+counts the exit, so the handlers stop on every node while the Commanded
+application keeps dispatching commands. `:temporary` never restarts the
+supervisor; `:transient` also brings it back if something kills it.
+
+This layout relies on the adapter's failover. With the `:global` adapter a
+`:transient` handler whose node stops gracefully exits with `:shutdown` on
+every node and is restarted nowhere.
 
 ### Network partitions
 
@@ -234,16 +343,22 @@ for what the PostgreSQL event store does about it.
 
 ### Logs
 
-The adapter logs at `:info` when a proxy sees its singleton go down
-(`SingletonProxy: singleton down, stopping the proxy: name=... node=...
-reason=... delay_ms=...`) and when a process loses a conflict
-(`SynRegistry: conflict lost, stopping the process: scope=... name=...
-pid=...`). A host that runs out of its restart budget logs at `:error`
-(`SingletonHost: too many registry restarts, stopping the host: name=...
-max_restarts=30 window_ms=5000`). Each restart for registry churn, and a
-message a Commanded process has no clause for, is logged at `:debug`. syn
-itself logs scope discovery, node arrivals and departures and each conflict
-at `:notice`.
+The adapter logs at `:info` when a proxy fails over after its singleton
+went down (`SingletonProxy: singleton down, stopping the proxy: name=...
+node=... reason=... delay_ms=...`), when a proxy finds that the name
+pointed at a process already gone (`SingletonProxy: name points at a
+process that is gone, looking it up again: name=... node=...
+delay_ms=...`) and then finds a new holder (`SingletonProxy: name taken by
+a new process, proxying it: name=... node=... pid=...`), when a proxy
+passes the holder's own exit on (`SingletonProxy: singleton exited on its
+own, passing the exit on: name=... node=... reason=...`) and when a process
+loses a conflict (`SynRegistry: conflict lost, stopping the process:
+scope=... name=... pid=...`). A host that runs out of its restart budget
+logs at `:error` (`SingletonHost: too many registry restarts, stopping
+the host: name=... max_restarts=30 window_ms=5000`). Each restart for
+registry churn, and a message a Commanded process has no clause for, is
+logged at `:debug`. syn itself logs scope discovery, node arrivals and
+departures and each conflict at `:notice`.
 
 ## What the adapter changes for the whole node
 
@@ -370,9 +485,9 @@ MIT. See the `LICENSE` file.
 ## Compared with the :global registry
 
 Commanded ships an adapter on `:global`, the name registry in OTP's kernel.
-What follows compares the two registries, not the adapters around them. This
-adapter was written after the situations below came up in a production
-cluster.
+What follows compares the two registries, and one choice the adapters
+around them make differently. This adapter was written after the situations
+below came up in a production cluster.
 
 ### Where :global hurts
 
@@ -408,6 +523,17 @@ every other node disconnects from both of them. A connection lost between
 two nodes therefore leaves both nodes outside the cluster. The OTP source
 says itself that this takes down more connections than the minimum needed to
 form fully connected partitions.
+
+Commanded's `:global` adapter links the supervisor on every node to the one
+process holding the name, so every exit of that process reaches every
+supervisor. That is right for a crash and for a stop the handler asked for,
+and this adapter keeps it. It is wrong for a node that stops or is lost:
+every handler on that node exits at once, every other node's supervisor
+counts one restart per handler, and four handlers are enough to exhaust the
+default intensity of 3 restarts in 5 seconds and take the supervisor down
+on the surviving nodes. Under `:transient` a graceful stop of one node ends
+a handler everywhere instead. This adapter absorbs those exits in the host
+and moves the name.
 
 ### Where syn is weaker
 

@@ -12,12 +12,17 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
   """
 
   alias Commanded.Registration.SynRegistry
+  alias Commanded.Registration.SynRegistry.ClusterTestApplication
+  alias Commanded.Registration.SynRegistry.ClusterTestQuickRejectingSingleton
+  alias Commanded.Registration.SynRegistry.ClusterTestRejectingSingleton
   alias Commanded.Registration.SynRegistry.ClusterTestSingleton
   alias Commanded.Registration.SynRegistry.ConflictResolution
   alias Commanded.Registration.SynRegistry.RecordingEventHandler
   alias Commanded.Registration.SynRegistry.SingletonHost
   alias Commanded.Registration.SynRegistry.SingletonProxy
   alias Commanded.Registration.SynRegistry.SingletonReaper
+
+  @singleton_application :cluster_test_application
 
   @doc """
   Starts syn on this node and installs `event_handler` as its event handler,
@@ -115,6 +120,61 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
   end
 
   @doc """
+  Starts a supervisor whose one child is the host of a `singleton_module`
+  singleton for `name`, and returns the supervisor. `child_overrides` go into
+  the host's child spec, and `supervisor_options` to `Supervisor.start_link/2`.
+  """
+  @spec start_supervised_singleton(
+          SingletonHost.adapter_meta(),
+          name :: term(),
+          singleton_module :: module(),
+          child_overrides :: keyword(),
+          supervisor_options :: keyword()
+        ) :: supervisor :: pid()
+  def start_supervised_singleton(adapter_meta, name, singleton_module, child_overrides, supervisor_options) do
+    host_spec = build_host_spec(adapter_meta, name, singleton_module, child_overrides)
+    {:ok, supervisor} = Supervisor.start_link([host_spec], supervisor_options)
+
+    Process.unlink(supervisor)
+
+    supervisor
+  end
+
+  @doc """
+  Loads and starts an application on this node whose supervisor hosts a
+  `ClusterTestSingleton` for `name`, and returns that supervisor.
+
+  The application starts after syn and depends on it, so a graceful stop of
+  the node stops the singleton's host before syn and before the node's
+  connections close.
+  """
+  @spec start_singleton_application(SingletonHost.adapter_meta(), name :: term()) :: supervisor :: pid()
+  def start_singleton_application(adapter_meta, name) do
+    application_keys = [mod: {ClusterTestApplication, {adapter_meta, name}}, applications: [:kernel, :stdlib, :syn]]
+    :ok = :application.load({:application, @singleton_application, application_keys})
+    :ok = :application.start(@singleton_application)
+    {:ok, supervisor} = :application.get_supervisor(@singleton_application)
+
+    supervisor
+  end
+
+  @doc """
+  Returns the child spec of a host for a `singleton_module` singleton
+  registered under `name`, with `child_overrides` applied.
+  """
+  @spec build_host_spec(
+          SingletonHost.adapter_meta(),
+          name :: term(),
+          singleton_module :: module(),
+          child_overrides :: keyword()
+        ) :: Supervisor.child_spec()
+  def build_host_spec(adapter_meta, name, singleton_module, child_overrides) do
+    host_start = {SynRegistry, :start_link, [adapter_meta, name, singleton_module, :state, []]}
+
+    Supervisor.child_spec(%{id: :singleton, start: host_start}, child_overrides)
+  end
+
+  @doc """
   Starts a process for `name` the way an aggregate is started, under a
   `DynamicSupervisor` of this node, and returns the process.
   """
@@ -129,12 +189,13 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
   end
 
   @doc """
-  Returns the child of a singleton's host process and what it is: the
-  registered process itself or a proxy for the node holding the name.
+  Returns the child of a singleton's host process, or of the supervisor
+  above a host, and what it is: the registered process itself, a proxy for
+  the node holding the name, or a host.
   """
-  @spec fetch_child(host :: pid()) :: {child :: pid(), :singleton | :proxy | :unknown} | :restarting
-  def fetch_child(host) do
-    case Supervisor.which_children(host) do
+  @spec fetch_child(supervisor :: pid()) :: {child :: pid(), :singleton | :proxy | :host | :unknown} | :restarting
+  def fetch_child(supervisor) do
+    case Supervisor.which_children(supervisor) do
       [{_id, pid, _type, _modules}] when is_pid(pid) -> {pid, classify_child(pid)}
       _children -> :restarting
     end
@@ -201,6 +262,33 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
   end
 
   @doc """
+  Holds syn's registry process for `scope` on this node from now until
+  `delay_ms` after `holder` exits, the way a registry process busy with
+  other names would. Until then this node neither reports that exit to the
+  other nodes nor registers anything.
+  """
+  @spec hold_registry_past_exit(scope :: atom(), holder :: pid(), delay_ms :: non_neg_integer()) :: :ok
+  def hold_registry_past_exit(scope, holder, delay_ms) do
+    registry_process = :syn_backbone.get_process_name({:syn_registry, scope})
+    :ok = :sys.suspend(registry_process)
+    spawn(__MODULE__, :resume_registry_after_exit, [registry_process, holder, delay_ms])
+
+    :ok
+  end
+
+  @doc false
+  @spec resume_registry_after_exit(registry_process :: atom(), holder :: pid(), delay_ms :: non_neg_integer()) :: :ok
+  def resume_registry_after_exit(registry_process, holder, delay_ms) do
+    ref = Process.monitor(holder)
+
+    receive do
+      {:DOWN, ^ref, :process, ^holder, _reason} ->
+        Process.sleep(delay_ms)
+        :sys.resume(registry_process)
+    end
+  end
+
+  @doc """
   Returns whether a process on this node is alive.
   """
   @spec alive?(pid()) :: boolean()
@@ -215,7 +303,10 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
   defp classify_child(pid) do
     case :proc_lib.initial_call(pid) do
       {SingletonProxy, :init, _arity} -> :proxy
+      {SingletonHost, :init, _arity} -> :host
       {ClusterTestSingleton, :init, _arity} -> :singleton
+      {ClusterTestQuickRejectingSingleton, :init, _arity} -> :singleton
+      {ClusterTestRejectingSingleton, :init, _arity} -> :singleton
       _other -> :unknown
     end
   end

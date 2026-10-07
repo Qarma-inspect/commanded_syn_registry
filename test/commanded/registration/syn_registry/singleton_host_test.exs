@@ -413,6 +413,18 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
       assert Supervisor.which_children(parent) == []
     end
 
+    test "a singleton that stops with :kill ends its host with :kill", ctx do
+      %{adapter_meta: adapter_meta, name: name} = ctx
+      parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary)
+      host = fetch_child(parent)
+      ref = Process.monitor(host)
+
+      :ok = host |> fetch_child() |> GenServer.stop(:kill)
+
+      assert_receive {:DOWN, ^ref, :process, ^host, :kill}, @poll_timeout_ms
+      assert Supervisor.which_children(parent) == []
+    end
+
     test "a singleton that stops with {:shutdown, reason} of its own ends its host with that reason", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary)
@@ -470,6 +482,22 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
         capture_log(fn ->
           host |> fetch_child() |> Process.exit(:crashed)
           assert_receive {:DOWN, ^ref, :process, ^host, :crashed}, @poll_timeout_ms
+          Process.sleep(100)
+        end)
+
+      refute log =~ "GenServer #{inspect(host)} terminating"
+    end
+
+    test "logs no crash report of the host for a singleton that stops with :kill", ctx do
+      %{adapter_meta: adapter_meta, name: name} = ctx
+      parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary)
+      host = fetch_child(parent)
+      ref = Process.monitor(host)
+
+      log =
+        capture_log(fn ->
+          :ok = host |> fetch_child() |> GenServer.stop(:kill)
+          assert_receive {:DOWN, ^ref, :process, ^host, :kill}, @poll_timeout_ms
           Process.sleep(100)
         end)
 
@@ -845,17 +873,62 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
       assert Supervisor.which_children(parent) == []
     end
 
-    test "a temporary parent keeps the proxying host when the holder crashes, and that host takes the name over", ctx do
+    test "a crash of the holder ends the proxying host with the crash reason, and a temporary parent drops it", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
-
       holder_parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary, parent_id: :holder)
+      holder = holder_parent |> fetch_child() |> fetch_child()
+      parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary)
+      host = fetch_child(parent)
+      ref = Process.monitor(host)
 
+      Process.exit(holder, :crashed)
+
+      assert_receive {:DOWN, ^ref, :process, ^host, :crashed}, @poll_timeout_ms
+      assert Supervisor.which_children(parent) == []
+      assert await_registered_pid(name, :undefined) == :undefined
+    end
+
+    test "a holder that stops with :kill ends the proxying host with :kill, and a temporary parent drops it", ctx do
+      %{adapter_meta: adapter_meta, name: name} = ctx
+      holder_parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary, parent_id: :holder)
+      holder = holder_parent |> fetch_child() |> fetch_child()
+      parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary)
+      host = fetch_child(parent)
+      ref = Process.monitor(host)
+
+      :ok = GenServer.stop(holder, :kill)
+
+      assert_receive {:DOWN, ^ref, :process, ^host, :kill}, @poll_timeout_ms
+      assert Supervisor.which_children(parent) == []
+      assert await_registered_pid(name, :undefined) == :undefined
+    end
+
+    test "a temporary parent keeps the proxying host when the holder is stopped with :shutdown, and that host takes the name over",
+         ctx do
+      %{adapter_meta: adapter_meta, name: name} = ctx
+      holder_parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary, parent_id: :holder)
       holder = holder_parent |> fetch_child() |> fetch_child()
       parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary)
       host = fetch_child(parent)
       proxy = fetch_child(host)
 
-      Process.exit(holder, :crashed)
+      :ok = GenServer.stop(holder, :shutdown)
+
+      singleton = await_new_child(host, proxy)
+      assert await_registered_pid(name, singleton) == singleton
+      assert fetch_child(parent) == host
+      assert Supervisor.which_children(holder_parent) == []
+    end
+
+    test "a temporary parent keeps the proxying host when the holder is killed, and that host takes the name over", ctx do
+      %{adapter_meta: adapter_meta, name: name} = ctx
+      holder_parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary, parent_id: :holder)
+      holder = holder_parent |> fetch_child() |> fetch_child()
+      parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary)
+      host = fetch_child(parent)
+      proxy = fetch_child(host)
+
+      Process.exit(holder, :kill)
 
       singleton = await_new_child(host, proxy)
       assert await_registered_pid(name, singleton) == singleton

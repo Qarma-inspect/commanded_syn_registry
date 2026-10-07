@@ -9,18 +9,28 @@ defmodule Commanded.Registration.SynRegistry.SingletonHost do
   # that monitors the process already holding that name.
   #
   # The host starts its child again only for registry churn: the singleton
-  # lost its name in a conflict, or the proxy exited because the process
-  # holding the name went down. A restart that syn keeps refusing because the
-  # name still points at a process that has exited is churn as well, and the
-  # host tries again until the name clears. A conflict round or a failover
-  # wave touches every handler on the node at once, and these restarts stay
-  # out of the restart budget of the application's supervision tree. They are
-  # counted against a budget of the host's own instead.
+  # lost its name in a conflict, or the proxy exited with a `SingletonProxy`
+  # failover reason because the process holding the name went down with its
+  # node, was stopped by it, had already gone, or lost a conflict. A restart
+  # that syn keeps refusing because the name still points at a process that
+  # has exited is churn as well, and the host tries again until the name
+  # clears. A conflict round or a failover wave touches every handler on the
+  # node at once, and these restarts stay out of the restart budget of the
+  # application's supervision tree. They are counted against a budget of the
+  # host's own instead.
   #
   # Every other exit of the singleton ends the host with the singleton's exit
-  # reason, so the parent's restart type and restart budget apply to the
-  # handler as if the parent supervised it directly. A crash, a crash loop and
-  # a stop the handler asks for all reach the parent unchanged.
+  # reason, on the node that ran the singleton and, through the proxies, on
+  # every node that proxied it. The parent's restart type and restart budget
+  # therefore apply to the handler on every node, as if each parent were
+  # linked to it, apart from an exit a proxy did not see: a proxy started
+  # for a name that still pointed at the exited singleton monitors the
+  # replacement once a lookup finds it, and misses an exit before that. A
+  # crash, a crash loop and a stop the handler asks for all reach the
+  # parents unchanged. A singleton that exits with a failover reason itself,
+  # a bare `:shutdown` or `:killed` for instance, reaches only the parent on
+  # its own node, and with `{:shutdown, :name_conflict}` no parent at all;
+  # the other nodes treat it as if its node had stopped it.
   #
   # The parent's shutdown value decides how long the singleton gets to stop.
   # On shutdown the host passes `:shutdown` to its child and waits for it with
@@ -246,10 +256,13 @@ defmodule Commanded.Registration.SynRegistry.SingletonHost do
     GenServer.start_link(state.module, state.args, registration_opts)
   end
 
-  # A proxy exits only after the process holding the name went down, so every
-  # exit of a proxy is churn. An exit of the singleton is churn only when it
+  # A proxy exits only after the process holding the name went down, and with
+  # the same reason. It is churn when that reason means the holder's node is
+  # lost or stopping, the name pointed at a process that was already gone, or
+  # the holder lost a conflict; any other reason is the singleton's own exit,
+  # which the proxy passes on. An exit of the singleton is churn only when it
   # lost its name in a conflict.
-  defp registry_churn?(%__MODULE__{child_role: :proxy}, _reason), do: true
+  defp registry_churn?(%__MODULE__{child_role: :proxy}, reason), do: SingletonProxy.failover_reason?(reason)
 
   defp registry_churn?(%__MODULE__{child_role: :singleton}, reason), do: ConflictResolution.singleton_conflict_loss?(reason)
 
@@ -300,6 +313,16 @@ defmodule Commanded.Registration.SynRegistry.SingletonHost do
   # parent applies its restart type to the exit the singleton made. A process
   # that sends itself `:normal` exits as well once it no longer traps exits.
   # The child is gone by now, so skipping `terminate/2` leaves nothing behind.
+  #
+  # A signal the host sends itself with `:kill` would end it with `:killed`,
+  # so the `:kill` signal comes from a linked process, as in the proxy.
+  defp exit_with(%__MODULE__{} = state, :kill) do
+    Process.flag(:trap_exit, false)
+    spawn_link(fn -> exit(:kill) end)
+
+    {:noreply, state}
+  end
+
   defp exit_with(%__MODULE__{} = state, reason) do
     Process.flag(:trap_exit, false)
     Process.exit(self(), reason)

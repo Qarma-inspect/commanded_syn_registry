@@ -25,21 +25,33 @@ defmodule Commanded.Registration.SynRegistry do
   event handler and process router, on every node, and Commanded supervises
   the host in the handler's place. The host runs the handler itself or a
   proxy for the process that holds the name, and it starts that child again
-  only for registry churn: the handler lost its name in a conflict, or the
-  proxy exited because the process holding the name went down, which also
-  covers a name that still points at a process on a node that has gone
-  away. A restart that syn refuses because the name still points at a local
-  process that has already exited counts as churn too, and the host tries
-  again until the name clears. A conflict round or a failover wave across a
-  hundred handlers leaves the restart budget of the application's
-  supervision tree alone. The host absorbs up to 30 such restarts within 5
-  seconds and exits with `{:too_many_registry_restarts, name}` on the next
-  one.
+  only for registry churn: the handler lost its name in a conflict, the
+  proxy saw the holder go down with a reason that means its node is lost or
+  stopping (`:noconnection`, `:shutdown`, `:killed`), the name pointed at a
+  process that was already gone (`:noproc`), the holder lost a conflict
+  (`{:shutdown, :name_conflict}`), or syn refused a restart because the name
+  still points at a local process that has already exited. A conflict round
+  or a failover wave across a hundred handlers leaves the restart budget of
+  the application's supervision tree alone. The host absorbs up to 30 such
+  restarts within 5 seconds and exits with
+  `{:too_many_registry_restarts, name}` on the next one.
 
-  Every other exit of the handler ends the host with the handler's own exit
-  reason. A crash, a crash loop, or a stop that the handler's `error/3`
-  callback asks for reaches the application's supervisor unchanged, and its
-  restart strategy and budget apply as if it supervised the handler directly.
+  Every other exit of the handler is its own: a crash, `:normal`, or the
+  `{:stop, reason}` its `error/3` callback asked for. It ends the host with
+  that reason on the node that ran the handler and, passed on at once by the
+  proxy, on every node that proxied it, so the application's supervisor
+  applies its restart type and budget on every node, as it does with
+  Commanded's `:global` adapter. A node whose table still named the exited
+  handler when its supervisor started the host again catches up with the
+  replacement within about 10 ms of the replacement's registration reaching
+  it, and does not count an exit of the replacement before that; the README
+  section "Failover" describes that window. A handler that stops with one
+  of the five reasons above, `:shutdown`, `:killed`, `:noproc`,
+  `:noconnection` or `{:shutdown, :name_conflict}`, is read as stopped by
+  its node or moved by the registry, and the parents on the other nodes do
+  not see the stop; stop deliberately with `{:shutdown, reason}`, where
+  `reason` is anything but `:name_conflict`, the adapter's own reason for a
+  lost conflict.
 
   The shutdown value the application's supervisor applies to the host also
   decides how long the handler gets to stop. The host passes the shutdown on
@@ -60,15 +72,19 @@ defmodule Commanded.Registration.SynRegistry do
   application is started with a `name:` option. Two applications on one
   node therefore never share a name.
 
-  `:failover_delay_range` bounds the random delay a proxy waits after the process
-  holding the name goes down and before it exits itself, which is what makes
-  its host start the child again and try for the name. The delay is
-  drawn uniformly from those bounds and defaults to `{200, 1_000}`, so the
-  proxies on all nodes reach that retry at different moments: the first one
-  registers the name, and the rest find it taken and proxy the new holder.
-  It also bounds the rate of the restart loop that runs while the name still
-  points at a process that has exited on another node, because that node has
-  gone away or because its scope process has not yet reported the exit.
+  `:failover_delay_range` bounds the random delay a proxy waits after the
+  process holding the name went down with its node, was stopped by it, was
+  already gone, or lost a name conflict, and before the proxy exits itself,
+  which is what makes its host start the child again and try for the name.
+  The delay is drawn uniformly from those bounds and defaults to
+  `{200, 1_000}`, so the proxies on all nodes reach that retry at different
+  moments: the first one registers the name, and the rest find it taken and
+  proxy the new holder. For a name that pointed at a process already gone,
+  the delay is also the time the proxy keeps looking the name up, every
+  10 ms, for a replacement to monitor instead of exiting. The range also
+  bounds the rate of the restart loop that runs while the name still points
+  at a process that has exited on another node, because that node has gone
+  away or because its scope process has not yet reported the exit.
 
   `:failover_delay_range` is the only option. Any other key, or the same key
   given twice, raises `ArgumentError` naming the application and the key when
