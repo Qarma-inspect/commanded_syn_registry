@@ -37,8 +37,8 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolution do
   module ignores the call. The registration metadata says whether the
   process is an aggregate, stopped with `:normal`, or a singleton, meaning
   an event handler or a process router, stopped with
-  `{:shutdown, :name_conflict}`. A registration without the kind, made by a
-  node that runs an older version of the adapter, is stopped with `:normal`.
+  `{:shutdown, :name_conflict}`. A registration whose metadata has no `:kind`
+  key is stopped with `:normal`, as an aggregate is.
 
   ## Every other scope
 
@@ -141,12 +141,17 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolution do
   """
   @impl :syn_event_handler
   def resolve_registry_conflict(scope, name, entry, other_entry) do
-    event_handler = fetch_earlier_event_handler()
+    earlier_event_handler = fetch_earlier_event_handler()
 
     cond do
-      adapter_scope?(scope) -> keep_first_started(entry, other_entry)
-      resolves_conflicts?(event_handler) -> event_handler.resolve_registry_conflict(scope, name, entry, other_entry)
-      true -> keep_last_registered(entry, other_entry)
+      adapter_scope?(scope) ->
+        keep_first_started(entry, other_entry)
+
+      resolves_conflicts?(earlier_event_handler) ->
+        earlier_event_handler.resolve_registry_conflict(scope, name, entry, other_entry)
+
+      true ->
+        keep_last_registered(entry, other_entry)
     end
   end
 
@@ -245,13 +250,13 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolution do
   defp record_earlier_event_handler do
     case Application.get_env(:syn, :event_handler) do
       __MODULE__ -> :ok
-      event_handler -> :persistent_term.put(@earlier_event_handler_key, event_handler)
+      earlier_event_handler -> :persistent_term.put(@earlier_event_handler_key, earlier_event_handler)
     end
   end
 
   defp fetch_earlier_event_handler, do: :persistent_term.get(@earlier_event_handler_key, nil)
 
-  defp resolves_conflicts?(event_handler), do: function_exported?(event_handler, :resolve_registry_conflict, 4)
+  defp resolves_conflicts?(earlier_event_handler), do: function_exported?(earlier_event_handler, :resolve_registry_conflict, 4)
 
   defp keep_first_started(
          {pid, %{started_at: started_at}, _time},
@@ -288,8 +293,8 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolution do
 
   defp stop_conflict_loser(_scope, _name, _pid, _metadata, _reason), do: :ok
 
-  # A node that runs an older version of the adapter registers names without
-  # the kind and stops every loser with `:normal`.
+  # A registration whose metadata has no `:kind` key is stopped with
+  # `:normal`, as an aggregate is.
   defp choose_stop_reason(%{kind: :singleton}), do: @singleton_conflict_loss_reason
   defp choose_stop_reason(_metadata), do: :normal
 
@@ -297,17 +302,17 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolution do
   # before it reports the loss, whenever the installed handler leaves
   # conflicts to syn. Installed in its place, this module sends it instead.
   defp unregister_without_adapter(scope, name, pid, metadata, reason) do
-    event_handler = fetch_earlier_event_handler()
+    earlier_event_handler = fetch_earlier_event_handler()
 
-    if kill_conflict_loser?(event_handler, pid, reason), do: Process.exit(pid, {:syn_resolve_kill, name, metadata})
+    if kill_conflict_loser?(earlier_event_handler, pid, reason), do: Process.exit(pid, {:syn_resolve_kill, name, metadata})
 
-    call_if_exported(event_handler, :on_process_unregistered, [scope, name, pid, metadata, reason])
+    call_if_exported(earlier_event_handler, :on_process_unregistered, [scope, name, pid, metadata, reason])
   end
 
-  defp kill_conflict_loser?(event_handler, pid, :syn_conflict_resolution),
-    do: node(pid) == node() and not resolves_conflicts?(event_handler)
+  defp kill_conflict_loser?(earlier_event_handler, pid, :syn_conflict_resolution),
+    do: node(pid) == node() and not resolves_conflicts?(earlier_event_handler)
 
-  defp kill_conflict_loser?(_event_handler, _pid, _reason), do: false
+  defp kill_conflict_loser?(_earlier_event_handler, _pid, _reason), do: false
 
   defp pass_to_earlier_event_handler(scope, callback, arguments) do
     if adapter_scope?(scope),
@@ -315,9 +320,9 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolution do
       else: call_if_exported(fetch_earlier_event_handler(), callback, arguments)
   end
 
-  defp call_if_exported(event_handler, callback, arguments) do
-    if function_exported?(event_handler, callback, length(arguments)),
-      do: apply(event_handler, callback, arguments),
+  defp call_if_exported(earlier_event_handler, callback, arguments) do
+    if function_exported?(earlier_event_handler, callback, length(arguments)),
+      do: apply(earlier_event_handler, callback, arguments),
       else: :ok
   end
 

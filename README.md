@@ -211,10 +211,9 @@ syn drops the loser's registration and leaves the process alive.
 inside the syn scope process, which has to go on serving registrations. The
 stop reason follows the kind recorded in the registration: `:normal` for an
 aggregate, `{:shutdown, :name_conflict}` for an event handler or process
-router, and `:normal` for a registration without a kind, made by a node
-that runs an older version of the adapter. The stop is a system message, so
-a command or an event the loser is handling at that moment, and anything
-already queued at it, completes first.
+router, and `:normal` for a registration whose metadata has no `:kind` key.
+The stop is a system message, so a command or an event the loser is
+handling at that moment, and anything already queued at it, completes first.
 
 For an aggregate, the losing copy is not restarted. A caller whose command
 reaches the losing copy after the stop sees the `:normal` exit as

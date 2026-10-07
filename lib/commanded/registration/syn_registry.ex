@@ -106,8 +106,7 @@ defmodule Commanded.Registration.SynRegistry do
   otp_release = System.otp_release()
 
   if String.to_integer(otp_release) < @minimum_otp_release do
-    raise "commanded_syn_registry requires OTP #{@minimum_otp_release} or later, " <>
-            "but this build runs on OTP #{otp_release}"
+    raise "commanded_syn_registry requires OTP #{@minimum_otp_release} or later, but this build runs on OTP #{otp_release}"
   end
 
   @doc """
@@ -160,8 +159,7 @@ defmodule Commanded.Registration.SynRegistry do
   """
   @impl Commanded.Registration.Adapter
   def start_child(adapter_meta, name, supervisor, child_spec) do
-    registration_name = build_registration_name(adapter_meta, name)
-    spec = build_registered_child_spec(child_spec, registration_name)
+    spec = build_registered_child_spec(child_spec, build_registration_name(adapter_meta, name))
 
     fn -> DynamicSupervisor.start_child(supervisor, spec) end
     |> VanishedHolder.start_with_retry()
@@ -258,11 +256,15 @@ defmodule Commanded.Registration.SynRegistry do
     end
   end
 
-  defp build_registered_child_spec(module, registration_name) when is_atom(module), do: {module, name: registration_name}
+  defp build_registered_child_spec(module, registration_name)
+       when is_atom(module) do
+    {module, name: registration_name}
+  end
 
   defp build_registered_child_spec({module, args}, registration_name)
-       when is_atom(module) and is_list(args),
-       do: {module, Keyword.put(args, :name, registration_name)}
+       when is_atom(module) and is_list(args) do
+    {module, Keyword.put(args, :name, registration_name)}
+  end
 
   # The registration carries the time the process is started and marks it as
   # an aggregate, which is what `ConflictResolution` reads when the same name

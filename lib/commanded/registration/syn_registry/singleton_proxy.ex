@@ -54,9 +54,16 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxy do
 
   @impl GenServer
   def init({pid, name, failover_delay_range}) do
-    ref = Process.monitor(pid)
+    monitor_ref = Process.monitor(pid)
 
-    {:ok, %__MODULE__{pid: pid, name: name, monitor_ref: ref, failover_delay_range: failover_delay_range}}
+    state = %__MODULE__{
+      pid: pid,
+      name: name,
+      monitor_ref: monitor_ref,
+      failover_delay_range: failover_delay_range
+    }
+
+    {:ok, state}
   end
 
   @impl GenServer
@@ -109,17 +116,19 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxy do
     failover_delay_range
   end
 
-  def validate_failover_delay_range!(other) do
+  def validate_failover_delay_range!(candidate) do
     raise ArgumentError,
           ":failover_delay_range must be a {min_ms, max_ms} tuple of non-negative integers with min <= max, got: " <>
-            inspect(other)
+            inspect(candidate)
   end
 
   defp log_singleton_down(name, pid, reason, delay_ms) do
+    holder_node = node(pid)
+
     [
       "SingletonProxy: singleton down, stopping the proxy:",
       "name=#{inspect(name)}",
-      "node=#{inspect(node(pid))}",
+      "node=#{inspect(holder_node)}",
       "reason=#{inspect(reason)}",
       "delay_ms=#{inspect(delay_ms)}"
     ]

@@ -156,11 +156,11 @@ defmodule Commanded.Registration.SynRegistry.SingletonHost do
   @impl GenServer
   def handle_info({:EXIT, child, reason}, %__MODULE__{child: child} = state) do
     if registry_churn?(state, reason),
-      do: restart_child(state, reason),
+      do: restart_child_within_budget(state, reason),
       else: exit_with(state, reason)
   end
 
-  def handle_info({:start_child_again, refusal}, %__MODULE__{child: nil} = state), do: restart_child(state, refusal)
+  def handle_info({:start_child_again, refusal}, %__MODULE__{child: nil} = state), do: restart_child_within_budget(state, refusal)
 
   def handle_info({:DOWN, ref, :process, _reaper, _reason}, %__MODULE__{reaper_ref: ref} = state),
     do: {:noreply, guard_with_new_reaper(state)}
@@ -183,7 +183,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHost do
         {:ok, %__MODULE__{state | child: singleton, child_role: :singleton}}
 
       {:error, {:already_started, holder}} when is_pid(holder) ->
-        lookup_name = build_lookup_name(state)
+        lookup_name = {:via, :syn, {state.scope, state.name}}
         # The proxy's init only sets up a monitor and cannot fail.
         {:ok, proxy} = SingletonProxy.start_link(holder, lookup_name, state.failover_delay_range)
 
@@ -240,7 +240,8 @@ defmodule Commanded.Registration.SynRegistry.SingletonHost do
   # a singleton, which is what `ConflictResolution` reads when the same name
   # turns up on two nodes.
   defp start_singleton(%__MODULE__{} = state) do
-    registration_opts = Keyword.put(state.start_opts, :name, build_registration_name(state))
+    registration_name = {:via, :syn, {state.scope, state.name, ConflictResolution.build_registration_metadata(:singleton)}}
+    registration_opts = Keyword.put(state.start_opts, :name, registration_name)
 
     GenServer.start_link(state.module, state.args, registration_opts)
   end
@@ -252,7 +253,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHost do
 
   defp registry_churn?(%__MODULE__{child_role: :singleton}, reason), do: ConflictResolution.singleton_conflict_loss?(reason)
 
-  defp restart_child(%__MODULE__{} = state, reason) do
+  defp restart_child_within_budget(%__MODULE__{} = state, reason) do
     now_ms = System.monotonic_time(:millisecond)
     recent_restarts = Enum.filter(state.registry_restarts, &within_restart_window?(&1, now_ms))
     registry_restarts = [now_ms | recent_restarts]
@@ -343,11 +344,6 @@ defmodule Commanded.Registration.SynRegistry.SingletonHost do
   defp count_children(%__MODULE__{child: nil}), do: [specs: 1, active: 0, supervisors: 0, workers: 1]
 
   defp count_children(%__MODULE__{}), do: [specs: 1, active: 1, supervisors: 0, workers: 1]
-
-  defp build_registration_name(%__MODULE__{scope: scope, name: name}),
-    do: {:via, :syn, {scope, name, ConflictResolution.build_registration_metadata(:singleton)}}
-
-  defp build_lookup_name(%__MODULE__{scope: scope, name: name}), do: {:via, :syn, {scope, name}}
 
   defp log_registry_restart(%__MODULE__{} = state, reason) do
     [
