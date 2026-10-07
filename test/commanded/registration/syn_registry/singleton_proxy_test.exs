@@ -3,6 +3,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxyTest do
 
   @moduletag :capture_log
 
+  import Commanded.Registration.SynRegistry.AbsentProcess
   import ExUnit.CaptureLog
 
   alias Commanded.Registration.SynRegistry.SingletonProxy
@@ -10,7 +11,15 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxyTest do
   @name {:handler, "singleton_proxy_test"}
 
   setup do
-    monitored = spawn_monitored_process()
+    # A process that runs until told to stop, owned by no test, so that the
+    # test process is not linked to it.
+    monitored =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
     [monitored: monitored]
   end
 
@@ -54,7 +63,8 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxyTest do
       send(proxy, :unexpected_message)
       send(proxy, {:DOWN, make_ref(), :process, monitored, :unrelated})
       %SingletonProxy{monitor_ref: monitor_ref} = :sys.get_state(proxy)
-      send(proxy, {:DOWN, monitor_ref, :process, spawn_dead_process(), :unrelated})
+      unrelated_pid = spawn_dead_process()
+      send(proxy, {:DOWN, monitor_ref, :process, unrelated_pid, :unrelated})
 
       refute_receive {:EXIT, ^proxy, _reason}, 50
       assert Process.alive?(proxy)
@@ -164,8 +174,10 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxyTest do
 
   describe "draw_failover_delay/1" do
     test "draws delays within the bounds and reaches both of them" do
-      draws = Stream.repeatedly(fn -> SingletonProxy.draw_failover_delay({150, 200}) end)
-      delays = Enum.take(draws, 1_000)
+      delays =
+        fn -> SingletonProxy.draw_failover_delay({150, 200}) end
+        |> Stream.repeatedly()
+        |> Enum.take(1_000)
 
       assert Enum.all?(delays, &(&1 in 150..200))
       assert Enum.min(delays) == 150
@@ -211,16 +223,6 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxyTest do
     end
   end
 
-  # A process that runs until told to stop, owned by no test, so that the
-  # test process is not linked to it.
-  defp spawn_monitored_process do
-    spawn(fn ->
-      receive do
-        :stop -> :ok
-      end
-    end)
-  end
-
   # The pause gives the proxy's exit time to be logged, if it were.
   defp stop_monitored_and_await_proxy_exit(monitored, proxy, reason) do
     Process.exit(monitored, reason)
@@ -232,20 +234,5 @@ defmodule Commanded.Registration.SynRegistry.SingletonProxyTest do
     {:ok, proxy} = SingletonProxy.start_link(monitored, @name, {0, 0})
     assert_receive {:EXIT, ^proxy, ^reason}
     Process.sleep(50)
-  end
-
-  # A pid whose node is not running: monitoring it reports `:noconnection`
-  # straight away, the way a lost connection to the hosting node does.
-  defp build_pid_on_unreachable_node(node) do
-    node_name = Atom.to_string(node)
-    atom = <<100, byte_size(node_name)::16, node_name::binary>>
-
-    :erlang.binary_to_term(<<131, 88, atom::binary, 1::32, 0::32, 1::32>>)
-  end
-
-  defp spawn_dead_process do
-    {pid, ref} = spawn_monitor(fn -> :ok end)
-    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
-    pid
   end
 end

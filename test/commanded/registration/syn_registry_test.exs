@@ -1,6 +1,7 @@
 defmodule Commanded.Registration.SynRegistryTest do
   use ExUnit.Case, async: false
 
+  import Commanded.Registration.SynRegistry.SupervisorChildren
   import ExUnit.CaptureLog
 
   alias Commanded.Aggregates.Aggregate, as: CommandedAggregate
@@ -9,13 +10,14 @@ defmodule Commanded.Registration.SynRegistryTest do
   alias Commanded.Registration
   alias Commanded.Registration.SynRegistry
   alias Commanded.Registration.SynRegistry.ConflictResolution
+  alias Commanded.Registration.SynRegistry.Polling
   alias Commanded.Registration.SynRegistry.RefusingProcess
   alias Commanded.Registration.SynRegistry.SingletonProxy
 
   defmodule Singleton do
     use GenServer
 
-    def init(arg), do: {:ok, arg}
+    def init(state), do: {:ok, state}
 
     def handle_call(:ping, _from, state), do: {:reply, :pong, state}
   end
@@ -210,7 +212,7 @@ defmodule Commanded.Registration.SynRegistryTest do
 
       assert {:ok, host} = SynRegistry.start_link(adapter_meta, name, Singleton, :state, [])
 
-      singleton = child_pid(host)
+      singleton = fetch_child(host)
       assert SynRegistry.whereis_name(adapter_meta, name) == singleton
       assert GenServer.call(singleton, :ping) == :pong
     end
@@ -219,16 +221,16 @@ defmodule Commanded.Registration.SynRegistryTest do
   describe "start_link/5 in two application scopes" do
     test "hosts a process under the same name in each scope", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
-      {:ok, [], other_meta} = SynRegistry.child_spec(__MODULE__.OtherApp, [])
+      {:ok, [], other_adapter_meta} = SynRegistry.child_spec(__MODULE__.OtherApp, [])
 
       {:ok, host} = SynRegistry.start_link(adapter_meta, name, Singleton, :first, [])
-      {:ok, other_host} = SynRegistry.start_link(other_meta, name, Singleton, :second, [])
+      {:ok, other_host} = SynRegistry.start_link(other_adapter_meta, name, Singleton, :second, [])
 
-      singleton = child_pid(host)
-      other_singleton = child_pid(other_host)
+      singleton = fetch_child(host)
+      other_singleton = fetch_child(other_host)
       assert singleton != other_singleton
       assert SynRegistry.whereis_name(adapter_meta, name) == singleton
-      assert SynRegistry.whereis_name(other_meta, name) == other_singleton
+      assert SynRegistry.whereis_name(other_adapter_meta, name) == other_singleton
       assert :sys.get_state(singleton) == :first
       assert :sys.get_state(other_singleton) == :second
     end
@@ -240,7 +242,9 @@ defmodule Commanded.Registration.SynRegistryTest do
 
       {:ok, host} = SynRegistry.start_link(adapter_meta, name, Singleton, :state, spawn_opt: [priority: :high])
 
-      assert Process.info(child_pid(host), :priority) == {:priority, :high}
+      singleton = fetch_child(host)
+
+      assert Process.info(singleton, :priority) == {:priority, :high}
     end
   end
 
@@ -308,7 +312,7 @@ defmodule Commanded.Registration.SynRegistryTest do
       assert {:ok, pid} = SynRegistry.start_child(adapter_meta, name, supervisor, {RefusingProcess, [counter: counter]})
 
       assert SynRegistry.whereis_name(adapter_meta, name) == pid
-      assert RefusingProcess.starts(counter) == 3
+      assert RefusingProcess.fetch_start_count(counter) == 3
     end
 
     test "gives up with the start error after five attempts when the name never clears", ctx do
@@ -318,7 +322,7 @@ defmodule Commanded.Registration.SynRegistryTest do
       assert SynRegistry.start_child(adapter_meta, name, supervisor, {RefusingProcess, [counter: counter]}) ==
                {:error, {:already_started, :undefined}}
 
-      assert RefusingProcess.starts(counter) == 5
+      assert RefusingProcess.fetch_start_count(counter) == 5
     end
   end
 
@@ -401,9 +405,11 @@ defmodule Commanded.Registration.SynRegistryTest do
 
     test "the registered names resolve to the processes inside the supervision tree's singleton hosts", ctx do
       %{handler: handler, router: router} = ctx
+      handler_host = fetch_child(CommandedTree, EventHandler)
+      router_host = fetch_child(CommandedTree, ProcessManager)
 
-      assert child_pid(tree_child_pid(EventHandler)) == handler
-      assert child_pid(tree_child_pid(ProcessManager)) == router
+      assert fetch_child(handler_host) == handler
+      assert fetch_child(router_host) == router
     end
 
     test "starting the event handler again yields a proxy and leaves the registered handler in place", ctx do
@@ -411,7 +417,9 @@ defmodule Commanded.Registration.SynRegistryTest do
 
       assert {:ok, host} = EventHandler.start_link()
 
-      assert %SingletonProxy{pid: ^handler} = :sys.get_state(child_pid(host))
+      proxy = fetch_child(host)
+
+      assert %SingletonProxy{pid: ^handler} = :sys.get_state(proxy)
       assert Process.alive?(handler)
 
       assert Registration.whereis_name(CommandedApp, Handler.name(CommandedApp, @handler_name)) == handler
@@ -433,7 +441,7 @@ defmodule Commanded.Registration.SynRegistryTest do
       handler_spec = Supervisor.child_spec(StoppingEventHandler, restart: :temporary)
       parent_start = {Supervisor, :start_link, [[handler_spec], [strategy: :one_for_one]]}
       parent = start_supervised!(%{id: :stopping_parent, start: parent_start, type: :supervisor})
-      host = child_pid(parent)
+      host = fetch_child(parent)
       ref = Process.monitor(host)
 
       :ok = CommandedApp.dispatch(%Increment{counter_id: counter_id})
@@ -484,34 +492,11 @@ defmodule Commanded.Registration.SynRegistryTest do
   defp await_registered_counter(counter_id) do
     name = CommandedAggregate.name(CommandedApp, Counter, counter_id)
 
-    await_registered(name, 100)
+    Polling.await(500, fn ->
+      case Registration.whereis_name(CommandedApp, name) do
+        :undefined -> {:error, "the aggregate did not register itself in time"}
+        pid -> {:ok, pid}
+      end
+    end)
   end
-
-  defp await_registered(_name, 0), do: flunk("the aggregate did not register itself in time")
-
-  defp await_registered(name, attempts_left) do
-    case Registration.whereis_name(CommandedApp, name) do
-      :undefined ->
-        Process.sleep(5)
-        await_registered(name, attempts_left - 1)
-
-      pid ->
-        pid
-    end
-  end
-
-  defp child_pid(supervisor) do
-    [{_id, pid, _type, _modules}] = Supervisor.which_children(supervisor)
-
-    pid
-  end
-
-  defp tree_child_pid(module) do
-    children = Supervisor.which_children(CommandedTree)
-    {_id, pid, _type, _modules} = Enum.find(children, &child_of_module?(&1, module))
-
-    pid
-  end
-
-  defp child_of_module?({_id, _pid, _type, modules}, module), do: module in modules
 end

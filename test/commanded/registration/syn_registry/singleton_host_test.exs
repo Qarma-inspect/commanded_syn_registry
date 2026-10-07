@@ -1,9 +1,11 @@
 defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
   use ExUnit.Case, async: false
 
+  import Commanded.Registration.SynRegistry.SupervisorChildren
   import ExUnit.CaptureLog
 
   alias Commanded.Registration.SynRegistry.ConflictResolution
+  alias Commanded.Registration.SynRegistry.Polling
   alias Commanded.Registration.SynRegistry.RefusingProcess
   alias Commanded.Registration.SynRegistry.SingletonHost
   alias Commanded.Registration.SynRegistry.SingletonProxy
@@ -12,7 +14,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
   defmodule Singleton do
     use GenServer
 
-    def init(arg), do: {:ok, arg}
+    def init(state), do: {:ok, state}
 
     def handle_call(:ping, _from, state), do: {:reply, :pong, state}
   end
@@ -58,10 +60,10 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
   defmodule BlockingSingleton do
     use GenServer
 
-    def init(arg) do
+    def init(state) do
       Process.flag(:trap_exit, true)
 
-      {:ok, arg}
+      {:ok, state}
     end
 
     def handle_call({:block, block_ms}, from, state) do
@@ -138,7 +140,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
 
       {:ok, host} = SingletonHost.start_link(adapter_meta, name, Singleton, :state, [])
 
-      child = child_pid(host)
+      child = fetch_child(host)
       assert :syn.whereis_name({@scope, name}) == child
       assert GenServer.call(child, :ping) == :pong
     end
@@ -148,7 +150,9 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
 
       {:ok, host} = SingletonHost.start_link(adapter_meta, name, Singleton, :state, [])
 
-      assert :sys.get_state(child_pid(host)) == :state
+      singleton = fetch_child(host)
+
+      assert :sys.get_state(singleton) == :state
     end
 
     test "registers the process with the time it was started", ctx do
@@ -175,7 +179,9 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
 
       {:ok, host} = SingletonHost.start_link(adapter_meta, name, Singleton, :state, spawn_opt: [priority: :high])
 
-      assert Process.info(child_pid(host), :priority) == {:priority, :high}
+      singleton = fetch_child(host)
+
+      assert Process.info(singleton, :priority) == {:priority, :high}
     end
 
     test "registers the process under the syn name even when the options carry another name", ctx do
@@ -183,7 +189,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
 
       {:ok, host} = SingletonHost.start_link(adapter_meta, name, Singleton, :state, name: :ignored_name)
 
-      child = child_pid(host)
+      child = fetch_child(host)
       assert :syn.whereis_name({@scope, name}) == child
       assert Process.whereis(:ignored_name) == nil
     end
@@ -202,7 +208,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     setup ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       holder_host = start_host(adapter_meta, name)
-      holder = child_pid(holder_host)
+      holder = fetch_child(holder_host)
       [holder_host: holder_host, holder: holder]
     end
 
@@ -211,7 +217,9 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
 
       {:ok, host} = SingletonHost.start_link(adapter_meta, name, Singleton, :state, [])
 
-      assert %SingletonProxy{pid: ^holder} = :sys.get_state(child_pid(host))
+      proxy = fetch_child(host)
+
+      assert %SingletonProxy{pid: ^holder} = :sys.get_state(proxy)
     end
 
     test "does not start when the adapter metadata carries no scope", ctx do
@@ -241,8 +249,9 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
       {:ok, host} = SingletonHost.start_link(adapter_meta, name, Singleton, :state, [])
 
       proxy_name = {:via, :syn, {@scope, name}}
+      proxy = fetch_child(host)
 
-      assert %SingletonProxy{name: ^proxy_name, failover_delay_range: {1, 2}} = :sys.get_state(child_pid(host))
+      assert %SingletonProxy{name: ^proxy_name, failover_delay_range: {1, 2}} = :sys.get_state(proxy)
     end
 
     test "leaves the name resolving to the process that holds it", ctx do
@@ -266,7 +275,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "hosts the registered process itself once the holder is gone", ctx do
       %{adapter_meta: adapter_meta, name: name, holder_host: holder_host} = ctx
       {:ok, host} = SingletonHost.start_link(adapter_meta, name, Singleton, :state, [])
-      proxy = child_pid(host)
+      proxy = fetch_child(host)
 
       :ok = GenServer.stop(holder_host)
 
@@ -283,9 +292,9 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
 
       {:ok, host} = SingletonHost.start_link(adapter_meta, name, RefusingProcess, counter, [])
 
-      child = child_pid(host)
+      child = fetch_child(host)
       assert :syn.whereis_name({@scope, name}) == child
-      assert RefusingProcess.starts(counter) == 3
+      assert RefusingProcess.fetch_start_count(counter) == 3
     end
 
     test "does not start once five attempts are refused", ctx do
@@ -297,7 +306,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
 
       refusal = {:already_started, :undefined}
       assert start == {:error, {:shutdown, {:failed_to_start_child, RefusingProcess, refusal}}}
-      assert RefusingProcess.starts(counter) == 5
+      assert RefusingProcess.fetch_start_count(counter) == 5
     end
   end
 
@@ -329,12 +338,12 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "answers any other call with an error and keeps hosting the singleton", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       host = start_host(adapter_meta, name)
-      singleton = child_pid(host)
+      singleton = fetch_child(host)
 
       assert Supervisor.terminate_child(host, Singleton) == {:error, :not_supported}
       assert GenServer.call(host, :unknown_request) == {:error, :not_supported}
 
-      assert child_pid(host) == singleton
+      assert fetch_child(host) == singleton
       assert :syn.whereis_name({@scope, name}) == singleton
     end
   end
@@ -343,25 +352,25 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "keeps hosting the singleton after a message it does not know", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       host = start_unlinked_host(adapter_meta, name)
-      singleton = child_pid(host)
+      singleton = fetch_child(host)
       host_ref = Process.monitor(host)
 
       send(host, :stray)
 
       refute_receive {:DOWN, ^host_ref, :process, ^host, _reason}, @prompt_exit_ms
-      assert child_pid(host) == singleton
+      assert fetch_child(host) == singleton
     end
 
     test "keeps hosting the singleton after an exit signal from a process that is not its child", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       host = start_unlinked_host(adapter_meta, name)
-      singleton = child_pid(host)
+      singleton = fetch_child(host)
       host_ref = Process.monitor(host)
 
       spawn(Process, :link, [host])
 
       refute_receive {:DOWN, ^host_ref, :process, ^host, _reason}, @prompt_exit_ms
-      assert child_pid(host) == singleton
+      assert fetch_child(host) == singleton
     end
   end
 
@@ -369,10 +378,10 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "a transient parent leaves the singleton stopped after it stops normally", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       parent = start_parent(adapter_meta, name, Singleton, :state, restart: :transient)
-      host = child_pid(parent)
+      host = fetch_child(parent)
       ref = Process.monitor(host)
 
-      :ok = GenServer.stop(child_pid(host), :normal)
+      :ok = host |> fetch_child() |> GenServer.stop(:normal)
 
       assert_receive {:DOWN, ^ref, :process, ^host, :normal}, @poll_timeout_ms
       assert [{:singleton, :undefined, :worker, _modules}] = Supervisor.which_children(parent)
@@ -382,10 +391,10 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "a temporary parent drops the singleton after it crashes", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary)
-      host = child_pid(parent)
+      host = fetch_child(parent)
       ref = Process.monitor(host)
 
-      Process.exit(child_pid(host), :crashed)
+      host |> fetch_child() |> Process.exit(:crashed)
 
       assert_receive {:DOWN, ^ref, :process, ^host, :crashed}, @poll_timeout_ms
       assert Supervisor.which_children(parent) == []
@@ -395,10 +404,10 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "a killed singleton ends its host with :killed", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary)
-      host = child_pid(parent)
+      host = fetch_child(parent)
       ref = Process.monitor(host)
 
-      Process.exit(child_pid(host), :kill)
+      host |> fetch_child() |> Process.exit(:kill)
 
       assert_receive {:DOWN, ^ref, :process, ^host, :killed}, @poll_timeout_ms
       assert Supervisor.which_children(parent) == []
@@ -407,10 +416,10 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "a singleton that stops with {:shutdown, reason} of its own ends its host with that reason", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary)
-      host = child_pid(parent)
+      host = fetch_child(parent)
       ref = Process.monitor(host)
 
-      :ok = GenServer.stop(child_pid(host), {:shutdown, :rejected})
+      :ok = host |> fetch_child() |> GenServer.stop({:shutdown, :rejected})
 
       assert_receive {:DOWN, ^ref, :process, ^host, {:shutdown, :rejected}}, @poll_timeout_ms
       assert Supervisor.which_children(parent) == []
@@ -419,10 +428,10 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "a singleton that stops with :shutdown ends its host with :shutdown", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary)
-      host = child_pid(parent)
+      host = fetch_child(parent)
       ref = Process.monitor(host)
 
-      :ok = GenServer.stop(child_pid(host), :shutdown)
+      :ok = host |> fetch_child() |> GenServer.stop(:shutdown)
 
       assert_receive {:DOWN, ^ref, :process, ^host, :shutdown}, @poll_timeout_ms
       assert Supervisor.which_children(parent) == []
@@ -431,12 +440,12 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "a permanent parent starts a new host after the singleton crashes", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       parent = start_parent(adapter_meta, name, Singleton, :state, restart: :permanent)
-      host = child_pid(parent)
+      host = fetch_child(parent)
 
-      Process.exit(child_pid(host), :crashed)
+      host |> fetch_child() |> Process.exit(:crashed)
 
       new_host = await_new_child(parent, host)
-      singleton = child_pid(new_host)
+      singleton = fetch_child(new_host)
       assert await_registered_pid(name, singleton) == singleton
     end
 
@@ -447,18 +456,19 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
       _parent = start_parent(adapter_meta, name, CrashingSingleton, args, restart: :permanent)
 
       hosts = Enum.map(1..3, fn _start -> receive_singleton_start() end)
-      assert hosts |> Enum.uniq() |> length() == 3
+      distinct_hosts = Enum.uniq(hosts)
+      assert length(distinct_hosts) == 3
     end
 
     test "logs no crash report of the host for the singleton's exit", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary)
-      host = child_pid(parent)
+      host = fetch_child(parent)
       ref = Process.monitor(host)
 
       log =
         capture_log(fn ->
-          Process.exit(child_pid(host), :crashed)
+          host |> fetch_child() |> Process.exit(:crashed)
           assert_receive {:DOWN, ^ref, :process, ^host, :crashed}, @poll_timeout_ms
           Process.sleep(100)
         end)
@@ -471,14 +481,14 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "keeps the host through a restart whose five starts are refused, and hosts the singleton once the name clears", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       {host, counter} = start_host_refused_after_first_start(adapter_meta, name, 5)
-      singleton = child_pid(host)
+      singleton = fetch_child(host)
       ref = Process.monitor(host)
 
       :ok = GenServer.stop(singleton, @name_conflict)
 
       replacement = await_new_child(host, singleton)
       assert await_registered_pid(name, replacement) == replacement
-      assert RefusingProcess.starts(counter) == 7
+      assert RefusingProcess.fetch_start_count(counter) == 7
       refute_received {:DOWN, ^ref, :process, ^host, _reason}
     end
 
@@ -488,7 +498,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
       {host, _counter} = start_host_refused_after_first_start(adapter_meta, name, 1_000)
       ref = Process.monitor(host)
 
-      :ok = GenServer.stop(child_pid(host), @name_conflict)
+      :ok = host |> fetch_child() |> GenServer.stop(@name_conflict)
 
       assert_receive {:DOWN, ^ref, :process, ^host, reason}, 5_000
       assert reason == {:too_many_registry_restarts, name}
@@ -498,7 +508,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
       %{adapter_meta: adapter_meta, name: name} = ctx
       {host, _counter} = start_host_refused_after_first_start(adapter_meta, name, 1_000)
 
-      :ok = GenServer.stop(child_pid(host), @name_conflict)
+      :ok = host |> fetch_child() |> GenServer.stop(@name_conflict)
 
       assert await_restarting_child(host) == [{RefusingProcess, :restarting, :worker, [RefusingProcess]}]
 
@@ -508,7 +518,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "stops when asked to between refused restarts", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       {host, _counter} = start_host_refused_after_first_start(adapter_meta, name, 1_000)
-      :ok = GenServer.stop(child_pid(host), @name_conflict)
+      :ok = host |> fetch_child() |> GenServer.stop(@name_conflict)
       await_restarting_child(host)
 
       assert GenServer.stop(host) == :ok
@@ -519,26 +529,26 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "a parent whose 1 second shutdown runs out finds the singleton blocked in a callback killed and its name free", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       parent = start_parent(adapter_meta, name, BlockingSingleton, :state, shutdown: 1_000)
-      singleton = parent |> child_pid() |> child_pid()
+      singleton = parent |> fetch_child() |> fetch_child()
       :blocking = GenServer.call(singleton, {:block, 3_000})
       ref = Process.monitor(singleton)
 
       :ok = Supervisor.stop(parent)
 
-      assert_receive {:DOWN, ^ref, :process, ^singleton, :killed}, @prompt_exit_ms
+      assert_receive {:DOWN, ^ref, :process, ^singleton, :killed}, @poll_timeout_ms
       assert await_registered_pid(name, :undefined) == :undefined
     end
 
     test "a parent with :brutal_kill finds the singleton blocked in a callback killed and its name free", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       parent = start_parent(adapter_meta, name, BlockingSingleton, :state, shutdown: :brutal_kill)
-      singleton = parent |> child_pid() |> child_pid()
+      singleton = parent |> fetch_child() |> fetch_child()
       :blocking = GenServer.call(singleton, {:block, 3_000})
       ref = Process.monitor(singleton)
 
       :ok = Supervisor.stop(parent)
 
-      assert_receive {:DOWN, ^ref, :process, ^singleton, :killed}, @prompt_exit_ms
+      assert_receive {:DOWN, ^ref, :process, ^singleton, :killed}, @poll_timeout_ms
       assert await_registered_pid(name, :undefined) == :undefined
     end
 
@@ -552,7 +562,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
       patient_parent = start_parent(adapter_meta, other_name, BlockingSingleton, :state, shutdown: :infinity, parent_id: :patient)
 
       parents = [waiting_parent, patient_parent]
-      [waiting, patient] = Enum.map(parents, &(&1 |> child_pid() |> child_pid()))
+      [waiting, patient] = Enum.map(parents, &(&1 |> fetch_child() |> fetch_child()))
       :blocking = GenServer.call(waiting, {:block, 5_500})
       :blocking = GenServer.call(patient, {:block, 5_500})
       waiting_ref = Process.monitor(waiting)
@@ -569,8 +579,8 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
          ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       parent = start_parent(adapter_meta, name, BlockingSingleton, :state, shutdown: 1_000)
-      host = child_pid(parent)
-      singleton = child_pid(host)
+      host = fetch_child(parent)
+      singleton = fetch_child(host)
       reaper = :sys.get_state(host).reaper
       :blocking = GenServer.call(singleton, {:block, 5_000})
       ref = Process.monitor(singleton)
@@ -580,7 +590,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
       Process.exit(reaper, :kill)
 
       assert Task.await(stop) == :ok
-      assert_receive {:DOWN, ^ref, :process, ^singleton, :killed}, @prompt_exit_ms
+      assert_receive {:DOWN, ^ref, :process, ^singleton, :killed}, @poll_timeout_ms
       assert await_registered_pid(name, :undefined) == :undefined
     end
 
@@ -588,8 +598,8 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
          ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       parent = start_parent(adapter_meta, name, BlockingSingleton, :state, shutdown: 1_000)
-      host = child_pid(parent)
-      singleton = child_pid(host)
+      host = fetch_child(parent)
+      singleton = fetch_child(host)
       reaper = :sys.get_state(host).reaper
       :blocking = GenServer.call(singleton, {:block, 5_000})
       ref = Process.monitor(singleton)
@@ -601,7 +611,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
       Process.exit(new_reaper, :kill)
 
       assert Task.await(stop) == :ok
-      assert_receive {:DOWN, ^ref, :process, ^singleton, :killed}, @prompt_exit_ms
+      assert_receive {:DOWN, ^ref, :process, ^singleton, :killed}, @poll_timeout_ms
       assert await_registered_pid(name, :undefined) == :undefined
     end
 
@@ -609,8 +619,8 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
          ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       parent = start_parent(adapter_meta, name, BlockingSingleton, :state, shutdown: 1_000)
-      host = child_pid(parent)
-      singleton = child_pid(host)
+      host = fetch_child(parent)
+      singleton = fetch_child(host)
       reaper = :sys.get_state(host).reaper
       :blocking = GenServer.call(singleton, {:block, 5_000})
       # With the name gone, only the pid the host hands its new reaper leads to the singleton.
@@ -622,7 +632,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
       Process.exit(reaper, :kill)
 
       assert Task.await(stop) == :ok
-      assert_receive {:DOWN, ^ref, :process, ^singleton, :killed}, @prompt_exit_ms
+      assert_receive {:DOWN, ^ref, :process, ^singleton, :killed}, @poll_timeout_ms
     end
 
     # Loading the module again drops the coverage instrumentation, so a
@@ -632,8 +642,8 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
          ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       parent = start_parent(adapter_meta, name, BlockingSingleton, :state, shutdown: 1_000)
-      host = child_pid(parent)
-      singleton = child_pid(host)
+      host = fetch_child(parent)
+      singleton = fetch_child(host)
       :blocking = GenServer.call(singleton, {:block, 5_000})
       ref = Process.monitor(singleton)
       stop = Task.async(Supervisor, :stop, [parent])
@@ -643,7 +653,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
       assert :code.purge(SingletonReaper)
 
       assert Task.await(stop) == :ok
-      assert_receive {:DOWN, ^ref, :process, ^singleton, :killed}, @prompt_exit_ms
+      assert_receive {:DOWN, ^ref, :process, ^singleton, :killed}, @poll_timeout_ms
       assert await_registered_pid(name, :undefined) == :undefined
     end
   end
@@ -667,7 +677,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "takes down its singleton blocked in a callback even when the name no longer resolves to it", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       host = start_unlinked_host(adapter_meta, name, BlockingSingleton)
-      singleton = child_pid(host)
+      singleton = fetch_child(host)
       :blocking = GenServer.call(singleton, {:block, 3_000})
       :ok = :syn.unregister(@scope, name)
       ref = Process.monitor(singleton)
@@ -680,7 +690,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "takes down a singleton that lost its name before the host took its start acknowledgement", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       host = start_suspending_host(adapter_meta, name)
-      :ok = GenServer.stop(child_pid(host), @name_conflict)
+      :ok = host |> fetch_child() |> GenServer.stop(@name_conflict)
       singleton = receive_continuing_singleton()
       :ok = :syn.unregister(@scope, name)
       ref = Process.monitor(singleton)
@@ -693,7 +703,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "takes down a singleton before the host took its start acknowledgement when syn's tables are gone", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       host = start_suspending_host(adapter_meta, name)
-      :ok = GenServer.stop(child_pid(host), @name_conflict)
+      :ok = host |> fetch_child() |> GenServer.stop(@name_conflict)
       singleton = receive_continuing_singleton()
       crash_syn_backbone()
       ref = Process.monitor(singleton)
@@ -709,10 +719,10 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
       host = start_suspending_host(adapter_meta, name)
       reaper = :sys.get_state(host).reaper
       reaper_ref = Process.monitor(reaper)
-      :ok = GenServer.stop(child_pid(host), @name_conflict)
+      :ok = host |> fetch_child() |> GenServer.stop(@name_conflict)
       singleton = receive_continuing_singleton()
       :ok = :syn.unregister(@scope, name)
-      other_singleton = adapter_meta |> start_host(name) |> child_pid()
+      other_singleton = adapter_meta |> start_host(name) |> fetch_child()
       ref = Process.monitor(singleton)
 
       Process.exit(host, :kill)
@@ -726,7 +736,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "takes down a singleton it started after its reaper died and before it read the reaper's DOWN", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       host = start_suspending_host(adapter_meta, name)
-      first_singleton = child_pid(host)
+      first_singleton = fetch_child(host)
       reaper = :sys.get_state(host).reaper
       reaper_ref = Process.monitor(reaper)
       true = :erlang.suspend_process(host)
@@ -745,7 +755,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
 
     test "that proxies leaves the process holding the name alive", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
-      holder = adapter_meta |> start_host(name) |> child_pid()
+      holder = adapter_meta |> start_host(name) |> fetch_child()
       host = start_unlinked_host(adapter_meta, name)
       reaper = :sys.get_state(host).reaper
       reaper_ref = Process.monitor(reaper)
@@ -760,7 +770,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "takes down its singleton after the reaper that guarded it was killed", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       host = start_unlinked_host(adapter_meta, name, BlockingSingleton)
-      singleton = child_pid(host)
+      singleton = fetch_child(host)
       reaper = :sys.get_state(host).reaper
 
       Process.exit(reaper, :kill)
@@ -780,7 +790,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "takes down its singleton after a code purge killed the reaper that guarded it", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       host = start_unlinked_host(adapter_meta, name, BlockingSingleton)
-      singleton = child_pid(host)
+      singleton = fetch_child(host)
       reaper = :sys.get_state(host).reaper
 
       {:module, SingletonReaper} = :code.load_file(SingletonReaper)
@@ -798,14 +808,14 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     test "a temporary parent keeps the host through a lost conflict, and the host registers the singleton again", ctx do
       %{adapter_meta: adapter_meta, name: name} = ctx
       parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary)
-      host = child_pid(parent)
-      singleton = child_pid(host)
+      host = fetch_child(parent)
+      singleton = fetch_child(host)
 
       :ok = GenServer.stop(singleton, @name_conflict)
 
       replacement = await_new_child(host, singleton)
       assert await_registered_pid(name, replacement) == replacement
-      assert child_pid(parent) == host
+      assert fetch_child(parent) == host
     end
 
     test "runs only the new singleton and its first reaper after a lost conflict", ctx do
@@ -826,10 +836,10 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
 
       parent = start_parent(adapter_meta, name, FailingRestartSingleton, starts, restart: :temporary)
 
-      host = child_pid(parent)
+      host = fetch_child(parent)
       host_ref = Process.monitor(host)
 
-      :ok = GenServer.stop(child_pid(host), @name_conflict)
+      :ok = host |> fetch_child() |> GenServer.stop(@name_conflict)
 
       assert_receive {:DOWN, ^host_ref, :process, ^host, :boom}, @poll_timeout_ms
       assert Supervisor.which_children(parent) == []
@@ -840,16 +850,16 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
 
       holder_parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary, parent_id: :holder)
 
-      holder = holder_parent |> child_pid() |> child_pid()
+      holder = holder_parent |> fetch_child() |> fetch_child()
       parent = start_parent(adapter_meta, name, Singleton, :state, restart: :temporary)
-      host = child_pid(parent)
-      proxy = child_pid(host)
+      host = fetch_child(parent)
+      proxy = fetch_child(host)
 
       Process.exit(holder, :crashed)
 
       singleton = await_new_child(host, proxy)
       assert await_registered_pid(name, singleton) == singleton
-      assert child_pid(parent) == host
+      assert fetch_child(parent) == host
       assert Supervisor.which_children(holder_parent) == []
     end
 
@@ -864,7 +874,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
 
       log =
         capture_log(fn ->
-          :ok = GenServer.stop(child_pid(host), @name_conflict)
+          :ok = host |> fetch_child() |> GenServer.stop(@name_conflict)
           assert_receive {:DOWN, ^ref, :process, ^host, reason}, @poll_timeout_ms
           assert reason == {:too_many_registry_restarts, name}
         end)
@@ -881,7 +891,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
 
       Enum.each(1..30, fn _loss -> lose_conflict_and_await_restart(host) end)
       sleep_until(first_loss_at + 4_500)
-      :ok = GenServer.stop(child_pid(host), @name_conflict)
+      :ok = host |> fetch_child() |> GenServer.stop(@name_conflict)
 
       assert_receive {:DOWN, ^ref, :process, ^host, {:too_many_registry_restarts, ^name}}, @poll_timeout_ms
     end
@@ -998,14 +1008,8 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     host
   end
 
-  defp child_pid(supervisor) do
-    [{_id, pid, _type, _modules}] = Supervisor.which_children(supervisor)
-
-    pid
-  end
-
   defp lose_conflict_and_await_restart(host) do
-    singleton = child_pid(host)
+    singleton = fetch_child(host)
     :ok = GenServer.stop(singleton, @name_conflict)
 
     await_new_child(host, singleton)
@@ -1017,118 +1021,68 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
     Process.sleep(max(remaining_ms, 0))
   end
 
-  defp await_new_child(supervisor, previous_child), do: await_new_child(supervisor, previous_child, poll_deadline())
+  defp await_new_child(supervisor, previous_child) do
+    Polling.await(@poll_timeout_ms, fn ->
+      child = fetch_child(supervisor)
 
-  defp await_new_child(supervisor, previous_child, deadline) do
-    child = child_pid(supervisor)
-
-    cond do
-      is_pid(child) and child != previous_child ->
-        child
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("#{inspect(supervisor)} did not start a new child in time")
-
-      true ->
-        Process.sleep(10)
-        await_new_child(supervisor, previous_child, deadline)
-    end
+      if is_pid(child) and child != previous_child,
+        do: {:ok, child},
+        else: {:error, "#{inspect(supervisor)} did not start a new child in time"}
+    end)
   end
 
-  defp await_restarting_child(host), do: await_restarting_child(host, poll_deadline())
+  defp await_restarting_child(host) do
+    Polling.await(@poll_timeout_ms, fn ->
+      children = Supervisor.which_children(host)
 
-  defp await_restarting_child(host, deadline) do
-    children = Supervisor.which_children(host)
-
-    cond do
-      match?([{_id, :restarting, _type, _modules}], children) ->
-        children
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("#{inspect(host)} did not report a restarting child in time")
-
-      true ->
-        Process.sleep(10)
-        await_restarting_child(host, deadline)
-    end
+      if match?([{_id, :restarting, _type, _modules}], children),
+        do: {:ok, children},
+        else: {:error, "#{inspect(host)} did not report a restarting child in time"}
+    end)
   end
 
-  defp await_new_reaper(host, previous_reaper), do: await_new_reaper(host, previous_reaper, poll_deadline())
+  defp await_new_reaper(host, previous_reaper) do
+    Polling.await(@poll_timeout_ms, fn ->
+      reaper = :sys.get_state(host).reaper
 
-  defp await_new_reaper(host, previous_reaper, deadline) do
-    reaper = :sys.get_state(host).reaper
-
-    cond do
-      is_pid(reaper) and reaper != previous_reaper ->
-        reaper
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("#{inspect(host)} did not start a new reaper in time")
-
-      true ->
-        Process.sleep(10)
-        await_new_reaper(host, previous_reaper, deadline)
-    end
+      if is_pid(reaper) and reaper != previous_reaper,
+        do: {:ok, reaper},
+        else: {:error, "#{inspect(host)} did not start a new reaper in time"}
+    end)
   end
 
   # Returns once the host has asked the blocked singleton to stop and waits
   # for it. The singleton traps exits, so the request stays in its mailbox.
-  defp await_stop_request(singleton, host), do: await_stop_request(singleton, host, poll_deadline())
+  defp await_stop_request(singleton, host) do
+    Polling.await(@poll_timeout_ms, fn ->
+      {:messages, messages} = Process.info(singleton, :messages)
 
-  defp await_stop_request(singleton, host, deadline) do
-    {:messages, messages} = Process.info(singleton, :messages)
-
-    cond do
-      {:EXIT, host, :shutdown} in messages ->
-        :ok
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("#{inspect(host)} did not ask #{inspect(singleton)} to stop in time")
-
-      true ->
-        Process.sleep(10)
-        await_stop_request(singleton, host, deadline)
-    end
+      if {:EXIT, host, :shutdown} in messages,
+        do: {:ok, :ok},
+        else: {:error, "#{inspect(host)} did not ask #{inspect(singleton)} to stop in time"}
+    end)
   end
 
   # While the host waits for its child to stop it answers no `:sys` call, so
   # the test finds a new reaper among the processes the host started.
-  defp await_other_processes_started_by(host, known_pids), do: await_other_processes_started_by(host, known_pids, poll_deadline())
+  defp await_other_processes_started_by(host, known_pids) do
+    Polling.await(@poll_timeout_ms, fn ->
+      started_by_host = Enum.filter(Process.list(), &(Process.info(&1, :parent) == {:parent, host}))
+      other_pids = started_by_host -- known_pids
 
-  defp await_other_processes_started_by(host, known_pids, deadline) do
-    started_by_host = Enum.filter(Process.list(), &(Process.info(&1, :parent) == {:parent, host}))
-    other_pids = started_by_host -- known_pids
-
-    cond do
-      other_pids != [] ->
-        other_pids
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("#{inspect(host)} started no new process in time")
-
-      true ->
-        Process.sleep(10)
-        await_other_processes_started_by(host, known_pids, deadline)
-    end
+      if other_pids != [],
+        do: {:ok, other_pids},
+        else: {:error, "#{inspect(host)} started no new process in time"}
+    end)
   end
 
-  defp await_registered_pid(name, expected_pid), do: await_registered_pid(name, expected_pid, poll_deadline())
+  defp await_registered_pid(name, expected_pid) do
+    Polling.await(@poll_timeout_ms, fn ->
+      registered = :syn.whereis_name({@scope, name})
 
-  defp await_registered_pid(name, expected_pid, deadline) do
-    registered = :syn.whereis_name({@scope, name})
-
-    cond do
-      registered == expected_pid ->
-        registered
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("#{inspect(name)} resolves to #{inspect(registered)}")
-
-      true ->
-        Process.sleep(10)
-        await_registered_pid(name, expected_pid, deadline)
-    end
+      if registered == expected_pid,
+        do: {:ok, registered},
+        else: {:error, "#{inspect(name)} resolves to #{inspect(registered)}"}
+    end)
   end
-
-  defp poll_deadline, do: System.monotonic_time(:millisecond) + @poll_timeout_ms
 end

@@ -3,6 +3,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
 
   alias Commanded.Registration.SynRegistry.ClusterTestNode
   alias Commanded.Registration.SynRegistry.ConflictResolution
+  alias Commanded.Registration.SynRegistry.Polling
   alias Commanded.Registration.SynRegistry.RecordingEventHandler
 
   @application __MODULE__.App
@@ -40,8 +41,8 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
     host_a = call(peer_a, :start_singleton, [registry_a, name])
     Process.sleep(20)
     host_b = call(peer_b, :start_singleton, [registry_b, name])
-    {singleton_a, :singleton} = call(peer_a, :child, [host_a])
-    {singleton_b, :singleton} = call(peer_b, :child, [host_b])
+    {singleton_a, :singleton} = call(peer_a, :fetch_child, [host_a])
+    {singleton_b, :singleton} = call(peer_b, :fetch_child, [host_b])
     :ok = call(peer_b, :watch_exit, [singleton_b])
 
     assert call(peer_a, :connect, [node_b])
@@ -50,7 +51,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
     assert await_call(peer_b, :whereis, [registry_b, name], singleton_a) == singleton_a
     assert {_proxy, :proxy} = await_child(peer_b, host_b, :proxy)
     name_conflict = {:shutdown, :name_conflict}
-    assert await_call(peer_b, :exit_reason, [singleton_b], name_conflict) == name_conflict
+    assert await_call(peer_b, :fetch_exit_reason, [singleton_b], name_conflict) == name_conflict
     assert call(peer_b, :alive?, [host_b])
   end
 
@@ -66,7 +67,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
 
     assert await_call(peer_a, :whereis, [registry_a, name], aggregate_a) == aggregate_a
     assert await_call(peer_b, :whereis, [registry_b, name], aggregate_a) == aggregate_a
-    assert await_call(peer_b, :exit_reason, [aggregate_b], :normal) == :normal
+    assert await_call(peer_b, :fetch_exit_reason, [aggregate_b], :normal) == :normal
     assert call(peer_a, :alive?, [aggregate_a])
   end
 
@@ -75,10 +76,10 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
 
     assert call(peer_a, :connect, [node_b])
     host_a = call(peer_a, :start_singleton, [registry_a, name])
-    {singleton_a, :singleton} = call(peer_a, :child, [host_a])
+    {singleton_a, :singleton} = call(peer_a, :fetch_child, [host_a])
     await_call(peer_b, :whereis, [registry_b, name], singleton_a)
     host_b = call(peer_b, :start_singleton, [registry_b, name])
-    assert {_proxy, :proxy} = call(peer_b, :child, [host_b])
+    assert {_proxy, :proxy} = call(peer_b, :fetch_child, [host_b])
 
     :ok = :peer.stop(peer_a)
 
@@ -97,7 +98,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
 
     reaper = call(peer_a, :start_reaper_of_killed_host, [@host_scope, name])
 
-    assert await_call(peer_a, :exit_reason, [reaper], :normal) == :normal
+    assert await_call(peer_a, :fetch_exit_reason, [reaper], :normal) == :normal
     assert call(peer_b, :alive?, [holder])
   end
 
@@ -137,7 +138,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
     # syn sends an exit signal, when it sends one, before it reports the loser,
     # so any signal is already on its way. Give it time to arrive.
     Process.sleep(100)
-    assert call(peer_b, :exit_reason, [process_b]) == nil
+    assert call(peer_b, :fetch_exit_reason, [process_b]) == nil
     assert call(peer_b, :alive?, [process_b])
   end
 
@@ -151,7 +152,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
 
     # An exit signal from the other node would arrive within this pause.
     Process.sleep(100)
-    assert call(peer_b, :exit_reason, [process_b]) == nil
+    assert call(peer_b, :fetch_exit_reason, [process_b]) == nil
   end
 
   defp assert_syn_rule_decides_host_conflict(peer_a, peer_b, node_b, name) do
@@ -165,7 +166,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
 
     assert await_call(peer_a, :whereis_in_scope, [@host_scope, name], process_b) == process_b
     assert await_call(peer_b, :whereis_in_scope, [@host_scope, name], process_b) == process_b
-    assert await_call(peer_a, :exit_reason, [process_a], kill_reason) == kill_reason
+    assert await_call(peer_a, :fetch_exit_reason, [process_a], kill_reason) == kill_reason
     assert call(peer_b, :alive?, [process_b])
   end
 
@@ -180,7 +181,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
   defp start_peer(suffix) do
     name = :"syn_registry_#{suffix}_#{System.unique_integer([:positive])}"
 
-    peer_options = %{name: name, host: ~c"127.0.0.1", longnames: true, connection: :standard_io, args: peer_args()}
+    peer_options = %{name: name, host: ~c"127.0.0.1", longnames: true, connection: :standard_io, args: build_peer_args()}
 
     {:ok, peer, node} = :peer.start_link(peer_options)
     # Every restart and every lost connection these tests provoke is reported
@@ -194,7 +195,7 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
   # The peers load this project and its dependencies from the code paths of
   # the test node, and they stay out of each other's way until a test connects
   # them.
-  defp peer_args do
+  defp build_peer_args do
     code_paths = Enum.flat_map(:code.get_path(), fn directory -> [~c"-pa", directory] end)
 
     code_paths ++ [~c"-connect_all", ~c"false"]
@@ -202,41 +203,23 @@ defmodule Commanded.Registration.SynRegistryClusterTest do
 
   defp call(peer, function, args), do: :peer.call(peer, ClusterTestNode, function, args)
 
-  defp await_call(peer, function, args, expected), do: await_call(peer, function, args, expected, poll_deadline())
+  defp await_call(peer, function, args, expected) do
+    Polling.await(@poll_timeout_ms, fn ->
+      result = call(peer, function, args)
 
-  defp await_call(peer, function, args, expected, deadline) do
-    result = call(peer, function, args)
-
-    cond do
-      result == expected ->
-        result
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("#{function} returned #{inspect(result)}, expected #{inspect(expected)}")
-
-      true ->
-        Process.sleep(20)
-        await_call(peer, function, args, expected, deadline)
-    end
+      if result == expected,
+        do: {:ok, result},
+        else: {:error, "#{function} returned #{inspect(result)}, expected #{inspect(expected)}"}
+    end)
   end
 
-  defp await_child(peer, host, expected_kind), do: await_child(peer, host, expected_kind, poll_deadline())
+  defp await_child(peer, host, expected_kind) do
+    Polling.await(@poll_timeout_ms, fn ->
+      child = call(peer, :fetch_child, [host])
 
-  defp await_child(peer, host, expected_kind, deadline) do
-    child = call(peer, :child, [host])
-
-    cond do
-      match?({_pid, ^expected_kind}, child) ->
-        child
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("the host runs #{inspect(child)}, expected a #{expected_kind}")
-
-      true ->
-        Process.sleep(20)
-        await_child(peer, host, expected_kind, deadline)
-    end
+      if match?({_pid, ^expected_kind}, child),
+        do: {:ok, child},
+        else: {:error, "the host runs #{inspect(child)}, expected a #{expected_kind}"}
+    end)
   end
-
-  defp poll_deadline, do: System.monotonic_time(:millisecond) + @poll_timeout_ms
 end

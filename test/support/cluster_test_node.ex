@@ -93,7 +93,7 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
   Starts syn on this node, adds the application's scope and returns the
   adapter metadata the other functions here take.
   """
-  @spec start_registry(module(), SingletonProxy.failover_delay_range()) :: SingletonHost.adapter_meta()
+  @spec start_registry(application :: module(), SingletonProxy.failover_delay_range()) :: SingletonHost.adapter_meta()
   def start_registry(application, failover_delay_range) do
     {:ok, _started} = Application.ensure_all_started(:syn)
 
@@ -105,7 +105,7 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
   @doc """
   Starts a singleton for `name` and returns its host process.
   """
-  @spec start_singleton(SingletonHost.adapter_meta(), term()) :: pid()
+  @spec start_singleton(SingletonHost.adapter_meta(), name :: term()) :: host :: pid()
   def start_singleton(adapter_meta, name) do
     {:ok, host} = SynRegistry.start_link(adapter_meta, name, ClusterTestSingleton, :state, [])
 
@@ -118,7 +118,7 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
   Starts a process for `name` the way an aggregate is started, under a
   `DynamicSupervisor` of this node, and returns the process.
   """
-  @spec start_aggregate(SingletonHost.adapter_meta(), term()) :: pid()
+  @spec start_aggregate(SingletonHost.adapter_meta(), name :: term()) :: pid()
   def start_aggregate(adapter_meta, name) do
     {:ok, supervisor} = DynamicSupervisor.start_link(strategy: :one_for_one)
     Process.unlink(supervisor)
@@ -132,10 +132,10 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
   Returns the child of a singleton's host process and what it is: the
   registered process itself or a proxy for the node holding the name.
   """
-  @spec child(pid()) :: {pid(), :singleton | :proxy | :unknown} | :restarting
-  def child(host) do
+  @spec fetch_child(host :: pid()) :: {child :: pid(), :singleton | :proxy | :unknown} | :restarting
+  def fetch_child(host) do
     case Supervisor.which_children(host) do
-      [{_id, pid, _type, _modules}] when is_pid(pid) -> {pid, kind_of(pid)}
+      [{_id, pid, _type, _modules}] when is_pid(pid) -> {pid, classify_child(pid)}
       _children -> :restarting
     end
   end
@@ -143,11 +143,12 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
   @doc """
   Returns the process this node resolves `name` to.
   """
-  @spec whereis(SingletonHost.adapter_meta(), term()) :: pid() | :undefined
+  @spec whereis(SingletonHost.adapter_meta(), name :: term()) :: pid() | :undefined
   def whereis(adapter_meta, name), do: SynRegistry.whereis_name(adapter_meta, name)
 
   @doc """
-  Starts watching `pid` so that `exit_reason/1` can report how it ended.
+  Starts watching `pid` so that `fetch_exit_reason/1` can report how it
+  ended.
   """
   @spec watch_exit(pid()) :: :ok
   def watch_exit(pid) do
@@ -169,13 +170,13 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
   @doc """
   Returns how a watched process ended, or `nil` while it is still running.
   """
-  @spec exit_reason(pid()) :: term()
-  def exit_reason(pid), do: :persistent_term.get({__MODULE__, pid}, nil)
+  @spec fetch_exit_reason(pid()) :: term()
+  def fetch_exit_reason(pid), do: :persistent_term.get({__MODULE__, pid}, nil)
 
   @doc """
   Starts a reaper for a stand-in host that runs no singleton, kills the host,
-  and returns the pid of the reaper. `exit_reason/1` tells how the reaper
-  ended once `watch_exit/1` was called on it.
+  and returns the pid of the reaper. `fetch_exit_reason/1` tells how the
+  reaper ended once `watch_exit/1` was called on it.
   """
   @spec start_reaper_of_killed_host(scope :: atom(), name :: term()) :: pid()
   def start_reaper_of_killed_host(scope, name) do
@@ -191,7 +192,7 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
   end
 
   @doc false
-  @spec run_stand_in_host(pid(), atom(), term()) :: no_return()
+  @spec run_stand_in_host(caller :: pid(), scope :: atom(), name :: term()) :: no_return()
   def run_stand_in_host(caller, scope, name) do
     {reaper, _reaper_ref} = SingletonReaper.start_monitor(scope, name)
     send(caller, {:reaper, reaper})
@@ -211,7 +212,7 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
   @spec connect(node()) :: boolean()
   def connect(node), do: Node.connect(node)
 
-  defp kind_of(pid) do
+  defp classify_child(pid) do
     case :proc_lib.initial_call(pid) do
       {SingletonProxy, :init, _arity} -> :proxy
       {ClusterTestSingleton, :init, _arity} -> :singleton

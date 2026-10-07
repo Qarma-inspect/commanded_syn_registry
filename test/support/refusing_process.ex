@@ -20,7 +20,7 @@ defmodule Commanded.Registration.SynRegistry.RefusingProcess do
   @doc """
   Starts the counter that refuses the first `refusals` starts.
   """
-  @spec start_counter(non_neg_integer()) :: counter()
+  @spec start_counter(refusals :: non_neg_integer()) :: counter()
   def start_counter(refusals) do
     {:ok, counter} = Agent.start_link(fn -> %{refusals_left: refusals, starts: 0} end)
 
@@ -36,8 +36,8 @@ defmodule Commanded.Registration.SynRegistry.RefusingProcess do
   @doc """
   Returns how many times a process was started against `counter`.
   """
-  @spec starts(counter()) :: non_neg_integer()
-  def starts(counter), do: Agent.get(counter, & &1.starts)
+  @spec fetch_start_count(counter()) :: non_neg_integer()
+  def fetch_start_count(counter), do: Agent.get(counter, & &1.starts)
 
   @doc """
   Starts the process under the registered name passed in `opts`, the entry

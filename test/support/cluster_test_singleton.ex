@@ -25,7 +25,7 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestSingleton do
   end
 
   @impl GenServer
-  def init(arg), do: {:ok, arg}
+  def init(state), do: {:ok, state}
 
   @impl GenServer
   def handle_call(:ping, _from, state), do: {:reply, :pong, state}

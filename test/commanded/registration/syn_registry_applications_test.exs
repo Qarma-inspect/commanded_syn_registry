@@ -1,6 +1,8 @@
 defmodule Commanded.Registration.SynRegistryApplicationsTest do
   use ExUnit.Case, async: false
 
+  import Commanded.Registration.SynRegistry.SupervisorChildren
+
   alias Commanded.Event.Handler
   alias Commanded.Registration
   alias Commanded.Registration.SynRegistry
@@ -45,11 +47,9 @@ defmodule Commanded.Registration.SynRegistryApplicationsTest do
 
   setup do
     start_supervised!(Tree)
-
-    [
-      first: Registration.whereis_name(FirstApp, Handler.name(FirstApp, @handler_name)),
-      second: Registration.whereis_name(SecondApp, Handler.name(SecondApp, @handler_name))
-    ]
+    first = Registration.whereis_name(FirstApp, Handler.name(FirstApp, @handler_name))
+    second = Registration.whereis_name(SecondApp, Handler.name(SecondApp, @handler_name))
+    [first: first, second: second]
   end
 
   describe "two applications on one node" do
@@ -63,28 +63,21 @@ defmodule Commanded.Registration.SynRegistryApplicationsTest do
       assert Process.alive?(second)
     end
 
-    test "host each handler itself rather than a proxy for the other one" do
-      first_child = singleton_child(FirstHandler)
-      second_child = singleton_child(SecondHandler)
+    test "host each handler itself rather than a proxy for the other one", ctx do
+      %{first: first, second: second} = ctx
+      first_child = fetch_singleton_child(FirstHandler)
+      second_child = fetch_singleton_child(SecondHandler)
 
+      assert first_child == first
+      assert second_child == second
       refute match?(%SingletonProxy{}, :sys.get_state(first_child))
       refute match?(%SingletonProxy{}, :sys.get_state(second_child))
     end
   end
 
-  defp singleton_child(handler_module) do
-    host = tree_child_pid(handler_module)
-    [{_id, pid, _type, _modules}] = Supervisor.which_children(host)
+  defp fetch_singleton_child(handler_module) do
+    host = fetch_child(Tree, handler_module)
 
-    pid
+    fetch_child(host)
   end
-
-  defp tree_child_pid(module) do
-    children = Supervisor.which_children(Tree)
-    {_id, pid, _type, _modules} = Enum.find(children, &child_of_module?(&1, module))
-
-    pid
-  end
-
-  defp child_of_module?({_id, _pid, _type, modules}, module), do: module in modules
 end

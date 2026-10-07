@@ -1,6 +1,7 @@
 defmodule Commanded.Registration.SynRegistry.ConflictResolutionTest do
   use ExUnit.Case, async: false
 
+  import Commanded.Registration.SynRegistry.AbsentProcess
   import ExUnit.CaptureLog
 
   alias Commanded.Registration.SynRegistry
@@ -10,7 +11,7 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolutionTest do
   defmodule Singleton do
     use GenServer
 
-    def init(arg), do: {:ok, arg}
+    def init(state), do: {:ok, state}
   end
 
   # A host's event handler that leaves registry conflicts to syn. It hears of
@@ -45,33 +46,28 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolutionTest do
   setup do
     :ok = install_adapter_over(nil)
     on_exit(fn -> install_adapter_over(nil) end)
-    older = registry_entry(1_000)
-    newer = registry_entry(2_000)
+    older = build_registry_entry(1_000)
+    newer = build_registry_entry(2_000)
     [older: older, newer: newer]
   end
 
   describe "resolve_registry_conflict/4" do
-    test "keeps the process that was started first", ctx do
+    test "keeps the process that was started first whichever side of the conflict it arrives from", ctx do
       %{older: older, newer: newer} = ctx
 
-      assert ConflictResolution.resolve_registry_conflict(@scope, @name, older, newer) == pid_of(older)
-    end
-
-    test "keeps the same process whichever side of the conflict it arrives from", ctx do
-      %{older: older, newer: newer} = ctx
-
-      kept = ConflictResolution.resolve_registry_conflict(@scope, @name, newer, older)
-
-      assert kept == ConflictResolution.resolve_registry_conflict(@scope, @name, older, newer)
+      assert ConflictResolution.resolve_registry_conflict(@scope, @name, newer, older) == extract_pid(older)
+      assert ConflictResolution.resolve_registry_conflict(@scope, @name, older, newer) == extract_pid(older)
     end
 
     test "keeps the same process for two processes started at the same time", ctx do
       %{older: older} = ctx
-      other = registry_entry(1_000)
+      other = build_registry_entry(1_000)
+      older_pid = extract_pid(older)
+      other_pid = extract_pid(other)
 
       kept = ConflictResolution.resolve_registry_conflict(@scope, @name, older, other)
 
-      assert kept == max(pid_of(older), pid_of(other))
+      assert kept == max(older_pid, other_pid)
       assert ConflictResolution.resolve_registry_conflict(@scope, @name, other, older) == kept
     end
   end
@@ -109,8 +105,10 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolutionTest do
 
     test "reports no crash when the process that lost the conflict is already gone" do
       dead = spawn_dead_process()
+      metadata = build_registration_metadata(1_000, :singleton)
+      refute Process.alive?(dead)
 
-      log = capture_log(fn -> unregister_after_conflict_and_settle(dead) end)
+      log = capture_log(fn -> unregister_after_conflict_and_settle(dead, metadata) end)
 
       assert log =~ "SynRegistry: conflict lost"
       refute log =~ "[error]"
@@ -144,16 +142,11 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolutionTest do
       pid = start_singleton()
       ref = Process.monitor(pid)
       metadata = build_started_at_metadata(1_000)
+      node_down_reason = {:syn_remote_scope_node_down, @scope, node()}
 
       assert ConflictResolution.on_process_unregistered(@scope, @name, pid, metadata, :normal) == :ok
 
-      assert ConflictResolution.on_process_unregistered(
-               @scope,
-               @name,
-               pid,
-               metadata,
-               {:syn_remote_scope_node_down, @scope, node()}
-             ) == :ok
+      assert ConflictResolution.on_process_unregistered(@scope, @name, pid, metadata, node_down_reason) == :ok
 
       refute_receive {:DOWN, ^ref, :process, ^pid, _reason}, 50
       assert Process.alive?(pid)
@@ -175,18 +168,20 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolutionTest do
 
   describe "resolve_registry_conflict/4 in a scope of the host" do
     test "keeps the registration made last, as syn does, whatever the metadata holds" do
-      first = host_entry(%{started_at: 2_000}, 1_000)
-      last = host_entry(:undefined, 2_000)
+      first = build_host_entry(%{started_at: 2_000}, 1_000)
+      last = build_host_entry(:undefined, 2_000)
 
-      assert ConflictResolution.resolve_registry_conflict(@host_scope, @name, first, last) == pid_of(last)
+      assert ConflictResolution.resolve_registry_conflict(@host_scope, @name, first, last) == extract_pid(last)
 
-      assert ConflictResolution.resolve_registry_conflict(@host_scope, @name, last, first) == pid_of(last)
+      assert ConflictResolution.resolve_registry_conflict(@host_scope, @name, last, first) == extract_pid(last)
     end
 
     test "keeps the greater pid for two registrations made at the same time, as syn does" do
-      entry = host_entry(:undefined, 1_000)
-      other = host_entry(:undefined, 1_000)
-      greater_pid = max(pid_of(entry), pid_of(other))
+      entry = build_host_entry(:undefined, 1_000)
+      other = build_host_entry(:undefined, 1_000)
+      entry_pid = extract_pid(entry)
+      other_pid = extract_pid(other)
+      greater_pid = max(entry_pid, other_pid)
 
       assert ConflictResolution.resolve_registry_conflict(@host_scope, @name, entry, other) == greater_pid
 
@@ -225,10 +220,10 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolutionTest do
     end
 
     test "resolves the conflicts of the host's scopes" do
-      first = host_entry(:undefined, 1_000)
-      last = host_entry(:undefined, 2_000)
+      first = build_host_entry(:undefined, 1_000)
+      last = build_host_entry(:undefined, 2_000)
 
-      assert ConflictResolution.resolve_registry_conflict(@host_scope, @name, last, first) == pid_of(first)
+      assert ConflictResolution.resolve_registry_conflict(@host_scope, @name, last, first) == extract_pid(first)
 
       assert_received {RecordingEventHandler, :resolve_registry_conflict, [@host_scope, @name, ^last, ^first]}
     end
@@ -260,9 +255,10 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolutionTest do
         assert apply(ConflictResolution, callback, arguments) == :ok
       end
 
-      capture_log(fn -> unregister_after_conflict(start_singleton()) end)
+      singleton = start_singleton()
+      capture_log(fn -> unregister_after_conflict(singleton) end)
 
-      assert ConflictResolution.resolve_registry_conflict(@scope, @name, newer, older) == pid_of(older)
+      assert ConflictResolution.resolve_registry_conflict(@scope, @name, newer, older) == extract_pid(older)
 
       refute_received {RecordingEventHandler, _callback, [@scope | _arguments]}
     end
@@ -275,12 +271,12 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolutionTest do
     end
 
     test "gets syn's rule for the host's conflicts and hears of the loser syn's rule kills" do
-      first = host_entry(:undefined, 1_000)
-      last = host_entry(:undefined, 2_000)
+      first = build_host_entry(:undefined, 1_000)
+      last = build_host_entry(:undefined, 2_000)
       pid = spawn_plain_process()
       ref = Process.monitor(pid)
 
-      assert ConflictResolution.resolve_registry_conflict(@host_scope, @name, first, last) == pid_of(last)
+      assert ConflictResolution.resolve_registry_conflict(@host_scope, @name, first, last) == extract_pid(last)
 
       unregister_in_host_scope(pid, :syn_conflict_resolution)
 
@@ -359,7 +355,11 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolutionTest do
   defp unregister_in_host_scope(pid, reason),
     do: ConflictResolution.on_process_unregistered(@host_scope, @name, pid, :metadata, reason)
 
-  defp host_entry(metadata, time), do: {spawn_plain_process(), metadata, time}
+  defp build_host_entry(metadata, time) do
+    pid = spawn_plain_process()
+
+    {pid, metadata, time}
+  end
 
   # A process that traps exits and passes every message it gets on to the test
   # process, exit signals included, in the order they arrive.
@@ -396,9 +396,6 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolutionTest do
     ConflictResolution.on_process_unregistered(@scope, @name, pid, metadata, :syn_conflict_resolution)
   end
 
-  defp unregister_after_conflict_and_settle(pid),
-    do: unregister_after_conflict_and_settle(pid, build_registration_metadata(1_000, :singleton))
-
   # The stop runs in a process of its own, so give it time to report anything
   # it has to report while the log is still being captured.
   defp unregister_after_conflict_and_settle(pid, metadata) do
@@ -407,34 +404,19 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolutionTest do
     Process.sleep(100)
   end
 
-  # A pid whose node is not running, standing in for a process on another node.
-  defp build_pid_on_unreachable_node(node) do
-    node_name = Atom.to_string(node)
-    atom = <<100, byte_size(node_name)::16, node_name::binary>>
-
-    :erlang.binary_to_term(<<131, 88, atom::binary, 1::32, 0::32, 1::32>>)
-  end
-
-  defp spawn_dead_process do
-    {pid, ref} = spawn_monitor(fn -> :ok end)
-    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
-
-    pid
-  end
-
-  defp registry_entry(started_at) do
+  defp build_registry_entry(started_at) do
+    singleton = start_singleton()
     metadata = build_registration_metadata(started_at, :singleton)
 
-    {start_singleton(), metadata, System.system_time()}
+    {singleton, metadata, System.system_time()}
   end
 
   defp build_registration_metadata(started_at, kind), do: %{started_at: started_at, kind: kind}
 
-  # The metadata of a registration made by a node that runs an older version
-  # of the adapter.
+  # Registration metadata that has no `:kind` key.
   defp build_started_at_metadata(started_at), do: %{started_at: started_at}
 
-  defp pid_of({pid, _metadata, _time}), do: pid
+  defp extract_pid({pid, _metadata, _time}), do: pid
 
   # Unlinked, because a singleton that loses a conflict stops with a reason
   # that would take the test process down with it.

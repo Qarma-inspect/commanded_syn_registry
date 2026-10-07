@@ -324,8 +324,7 @@ fixes this by also excluding the dispatching handler by name. Until it is
 released, dispatch with `consistency: :eventual` from such a handler. The
 adapter changes nothing else about strong consistency: Commanded uses the
 registered pid for this exclusion only and tracks acknowledgements by
-handler name. The test suite pins the current behaviour, so the test turns
-red once a Commanded release carries the fix.
+handler name.
 
 ### syn 3.4.2 can stall on a repeated registry snapshot
 
