@@ -79,13 +79,13 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
   end
 
   @doc """
-  Tells the syn event handler on this node that `pid`, which may run on
+  Tells the syn event handler on this node that `loser`, which may run on
   another node, lost `name` in a conflict in `scope`, as syn does on every
   node that learns of the loss.
   """
   @spec report_conflict_loss(scope :: atom(), name :: term(), loser :: pid(), metadata :: term()) :: term()
-  def report_conflict_loss(scope, name, pid, metadata) do
-    ConflictResolution.on_process_unregistered(scope, name, pid, metadata, :syn_conflict_resolution)
+  def report_conflict_loss(scope, name, loser, metadata) do
+    ConflictResolution.on_process_unregistered(scope, name, loser, metadata, :syn_conflict_resolution)
   end
 
   @doc """
