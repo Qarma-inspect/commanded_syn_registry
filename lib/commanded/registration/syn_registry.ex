@@ -40,12 +40,11 @@ defmodule Commanded.Registration.SynRegistry do
   `{:stop, reason}` its `error/3` callback asked for. It ends the host with
   that reason on the node that ran the handler and, passed on at once by the
   proxy, on every node that proxied it, so the application's supervisor
-  applies its restart type and budget on every node, as it does with
-  Commanded's `:global` adapter. A node whose table still named the exited
-  handler when its supervisor started the host again catches up with the
-  replacement within about 10 ms of the replacement's registration reaching
-  it, and does not count an exit of the replacement before that; the README
-  section "Failover" describes that window. A handler that stops with one
+  applies its restart type and budget on every node. A node whose table
+  still named the exited handler when its supervisor started the host again
+  catches up with the replacement within about 10 ms of the replacement's
+  registration reaching it, and does not count an exit of the replacement
+  before that; the README section "Failover" describes that window. A handler that stops with one
   of the five reasons above, `:shutdown`, `:killed`, `:noproc`,
   `:noconnection` or `{:shutdown, :name_conflict}`, is read as stopped by
   its node or moved by the registry, and the parents on the other nodes do
