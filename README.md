@@ -33,15 +33,7 @@ end
 ```
 
 The package needs Elixir 1.15 or later on OTP 26 or later, `commanded`
-1.4.11 or later within 1.x, and `syn` 3.4.2 or later within 3.x. Those are
-the versions the suite runs against. The adapter also depends on syn 3.4:
-its lookup reports a dead local holder as `:undefined` (3.4.0), its registry
-sync leaves no stale entries behind after a node joins (3.4.0 to 3.4.2), and
-its conflict rule breaks equal timestamps by pid (3.4.1). The retry on a
-vanished holder, the failover loop and the rule the adapter applies in other
-scopes build on these. Commanded 1.4.11 is required only because the suite
-runs against it. On an OTP release older than 26 the package does not
-compile.
+1.4.11 or later within 1.x, and `syn` 3.4.2 or later within 3.x.
 
 ## Configuration
 
