@@ -76,9 +76,10 @@ random delay a node waits before it tries to take over a singleton whose
 process went down with its node, was stopped by it, was already gone, or
 lost a name conflict (see [Failover](#failover)). The value is a
 `{min_ms, max_ms}` tuple of non-negative integers with `min_ms <= max_ms`,
-and the default is `{200, 1_000}`. An invalid range, a key the adapter does
-not know, or a key given twice raises `ArgumentError` naming the application
-and the key when the Commanded application starts.
+and the default is `{200, 1_000}`. When the Commanded application starts,
+an invalid range raises `ArgumentError` naming the key, and a key the
+adapter does not know or a key given twice raises `ArgumentError` naming
+the application and the key.
 
 The adapter keeps the application's names in a syn scope named after the
 application's name, which is its module (`MyApp.CommandedApp` above) unless
