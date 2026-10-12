@@ -83,6 +83,13 @@ you start the application with a `name:` option. It adds the node to that
 scope when the application starts. Two Commanded applications on one node
 get two scopes and never see each other's names.
 
+The adapter installs `Commanded.Registration.SynRegistry.ConflictResolution`
+as the syn event handler of that scope, with `:syn.set_event_handler/2`, and
+sets no other handler in syn: a scope of your own keeps whatever handler it
+has. Do not list the application's scope under syn's `scope_event_handlers`
+key: the adapter writes over that entry when the Commanded application
+starts, and syn puts it back if the syn application restarts.
+
 ## How it works
 
 ### Aggregates
@@ -357,62 +364,6 @@ registry churn, and a message a Commanded process has no clause for, is
 logged at `:debug`. syn itself logs scope discovery, node arrivals and
 departures and each conflict at `:notice`.
 
-## What the adapter changes for the whole node
-
-Starting a Commanded application with this adapter calls
-`:syn.set_event_handler/1` with
-`Commanded.Registration.SynRegistry.ConflictResolution`. syn keeps one event
-handler per node, in the application environment of the `:syn` application,
-so the module is installed for every syn scope on the node. It applies the
-rule described under [Network partitions](#network-partitions) only in the
-scopes the adapter created, one per Commanded application, and leaves every
-other scope as it was:
-
-- if a handler was configured before the first Commanded application
-  started, with `config :syn, event_handler: ...` or
-  `:syn.set_event_handler/1`, every callback from such a scope goes to that
-  handler when it exports the callback. This includes the process group
-  callbacks;
-- without one, syn's own rule decides a conflict: the registration made last
-  wins, equal registration times go to the greater pid, and the loser is
-  sent the exit signal `{:syn_resolve_kill, name, metadata}` by its own
-  node.
-
-One difference remains: an exception raised by the earlier handler is caught
-and logged by syn, and the log names `ConflictResolution` as the callback
-module.
-
-A host that installs its own handler after a Commanded application has
-started replaces the adapter's, in every scope. The adapter keeps working
-when that handler passes the callbacks of the adapter's scopes back to it.
-`ConflictResolution.adapter_scope?/1` tells those scopes apart:
-
-```elixir
-defmodule MyApp.SynEventHandler do
-  @behaviour :syn_event_handler
-
-  alias Commanded.Registration.SynRegistry.ConflictResolution
-
-  @impl :syn_event_handler
-  def resolve_registry_conflict(scope, name, entry, other_entry) do
-    if ConflictResolution.adapter_scope?(scope),
-      do: ConflictResolution.resolve_registry_conflict(scope, name, entry, other_entry),
-      else: resolve_host_conflict(scope, name, entry, other_entry)
-  end
-
-  @impl :syn_event_handler
-  def on_process_unregistered(scope, name, pid, metadata, reason) do
-    if ConflictResolution.adapter_scope?(scope),
-      do: ConflictResolution.on_process_unregistered(scope, name, pid, metadata, reason),
-      else: :ok
-  end
-end
-```
-
-The handler has to export both callbacks: syn kills the loser of a conflict
-itself when the installed handler does not export
-`resolve_registry_conflict/4`. The adapter needs no other callback.
-
 ## Known limitations
 
 ### Strong consistency and a handler that dispatches to its own application
@@ -550,11 +501,6 @@ registration and unregistration in the scope goes through it, so anything
 that keeps it busy, such as the snapshot reconciliation in
 [Known limitations](#known-limitations), delays all of them. Lookups read
 the tables directly and are not affected.
-
-The syn event handler is one per VM. The adapter installs its own and routes
-by scope, which limits the impact, but a host application with a handler of
-its own has to delegate the adapter's scopes as shown under
-[What the adapter changes for the whole node](#what-the-adapter-changes-for-the-whole-node).
 
 Until commanded#668 is released, a strongly consistent handler that
 dispatches a strongly consistent command to its own application times out;

@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- The adapter installs `Commanded.Registration.SynRegistry.ConflictResolution`
+  as the syn event handler of each Commanded application's scope, with
+  `:syn.set_event_handler/2`, and sets no other handler in syn.
+- Breaking: `ConflictResolution.adapter_scope?/1` is removed. syn no longer
+  sends the adapter's scopes to a syn event handler of your own, so delete
+  the branch that passed them back to the adapter. Remove
+  `Commanded.Registration.SynRegistry.ConflictResolution` from
+  `config :syn, event_handler:` if you set it there: as the handler of a
+  scope of your own it would free a clashing name on both nodes, log an
+  error and try to stop both processes. `resolve_registry_conflict/4` and
+  `on_process_unregistered/5` apply the adapter's rule to whatever scope
+  they are called with.
+- Requires a syn with `:syn.set_event_handler/2`, proposed in
+  [ostinelli/syn#93](https://github.com/ostinelli/syn/pull/93). Until it is
+  released, this branch takes syn from
+  [Qarma-inspect/syn](https://github.com/Qarma-inspect/syn) at commit
+  1b4a030.
+
 ## v0.1.0
 
 Initial release.

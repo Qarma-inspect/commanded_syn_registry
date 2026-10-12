@@ -9,7 +9,6 @@ defmodule Commanded.Registration.SynRegistryTest do
   alias Commanded.ProcessManagers.ProcessRouter
   alias Commanded.Registration
   alias Commanded.Registration.SynRegistry
-  alias Commanded.Registration.SynRegistry.ConflictResolution
   alias Commanded.Registration.SynRegistry.Polling
   alias Commanded.Registration.SynRegistry.RefusingProcess
   alias Commanded.Registration.SynRegistry.SingletonProxy
@@ -125,6 +124,12 @@ defmodule Commanded.Registration.SynRegistryTest do
     def init(_arg), do: Supervisor.init([CommandedApp, EventHandler, ProcessManager], strategy: :one_for_one)
   end
 
+  # A syn event handler of the host application. It exports no callback, so
+  # syn skips every callback of the scopes it is selected for.
+  defmodule HostEventHandler do
+    @behaviour :syn_event_handler
+  end
+
   @application __MODULE__.App
 
   setup do
@@ -176,10 +181,13 @@ defmodule Commanded.Registration.SynRegistryTest do
       assert @application in :syn.node_scopes()
     end
 
-    test "installs the conflict resolution event handler" do
+    test "leaves syn's node-wide event handler to the host application" do
+      :ok = :syn.set_event_handler(HostEventHandler)
+      on_exit(fn -> Application.delete_env(:syn, :event_handler) end)
+
       {:ok, [], _adapter_meta} = SynRegistry.child_spec(@application, [])
 
-      assert Application.get_env(:syn, :event_handler) == ConflictResolution
+      assert Application.get_env(:syn, :event_handler) == HostEventHandler
     end
   end
 

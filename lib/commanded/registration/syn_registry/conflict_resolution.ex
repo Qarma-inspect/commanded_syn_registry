@@ -1,15 +1,18 @@
 defmodule Commanded.Registration.SynRegistry.ConflictResolution do
   @moduledoc """
-  The syn event handler the adapter installs, and the rule it applies when two
-  nodes hold the same name in the scope of a Commanded application.
+  The syn event handler of every scope the adapter creates, and the rule it
+  applies when two nodes hold the same name in such a scope.
 
-  syn keeps one event handler for the whole node. Starting a Commanded
-  application with `Commanded.Registration.SynRegistry` installs this module
-  as that handler and records the application's scope as one the adapter
-  owns. The rule below applies only in those scopes, and `adapter_scope?/1`
-  tells them apart from the rest.
+  `Commanded.Registration.SynRegistry` installs this module with
+  `:syn.set_event_handler/2` as the event handler of each Commanded
+  application's scope, before the node joins the scope, and sets no other
+  handler in syn. syn calls this module for everything that happens in that
+  scope and for nothing else. Do not list the application's scope under
+  syn's `scope_event_handlers` configuration key: the adapter writes over
+  that entry when the Commanded application starts, and syn puts it back
+  if the syn application restarts.
 
-  ## Conflicts in the adapter's scopes
+  ## Conflicts
 
   syn registers a name with a local write and a broadcast, so two nodes that
   cannot see each other can each register the same name. When they meet, syn
@@ -39,48 +42,11 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolution do
   an event handler or a process router, stopped with
   `{:shutdown, :name_conflict}`. A registration whose metadata has no `:kind`
   key is stopped with `:normal`, as an aggregate is.
-
-  ## Every other scope
-
-  A scope the adapter did not create behaves as it would without the
-  adapter. When another event handler was installed at the moment the adapter
-  installed this module, each callback for such a scope goes to that handler,
-  if it exports the callback. Without one, syn's own rule decides a conflict:
-  the registration made last wins, equal registration times go to the
-  greater pid, and the other process is sent an exit signal with the reason
-  `{:syn_resolve_kill, name, metadata}` by its own node.
-
-  ## An event handler installed after the adapter
-
-  A host application that installs its own handler once a Commanded
-  application has started replaces this module in every scope. The adapter
-  keeps working when that handler passes the callbacks of the adapter's
-  scopes to `resolve_registry_conflict/4` and `on_process_unregistered/5`:
-
-      alias Commanded.Registration.SynRegistry.ConflictResolution
-
-      def resolve_registry_conflict(scope, name, entry, other_entry) do
-        if ConflictResolution.adapter_scope?(scope),
-          do: ConflictResolution.resolve_registry_conflict(scope, name, entry, other_entry),
-          else: resolve_host_conflict(scope, name, entry, other_entry)
-      end
-
-      def on_process_unregistered(scope, name, pid, metadata, reason) do
-        if ConflictResolution.adapter_scope?(scope),
-          do: ConflictResolution.on_process_unregistered(scope, name, pid, metadata, reason),
-          else: :ok
-      end
-
-  The handler has to export both callbacks: syn kills the loser of a
-  conflict itself when the installed handler does not export
-  `resolve_registry_conflict/4`. The adapter needs no other callback.
   """
 
   @behaviour :syn_event_handler
 
   require Logger
-
-  @earlier_event_handler_key {__MODULE__, :earlier_event_handler}
 
   # The reason a singleton that loses its name in a conflict stops with.
   @singleton_conflict_loss_reason {:shutdown, :name_conflict}
@@ -94,28 +60,13 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolution do
   @typedoc false
   @type registration_metadata :: %{started_at: integer(), kind: registration_kind()}
 
-  @doc """
-  Returns whether `scope` is the syn scope of a Commanded application that
-  was started with this adapter on this node.
-
-  An event handler installed after the adapter uses it to pick the callbacks
-  it passes to this module.
-  """
-  @spec adapter_scope?(scope :: atom()) :: boolean()
-  def adapter_scope?(scope), do: :persistent_term.get({__MODULE__, :adapter_scope, scope}, false)
-
   # Called by `Commanded.Registration.SynRegistry.child_spec/2` for every
-  # Commanded application, before the node joins the scope. The handler this
-  # module replaces is read first, and the scope is recorded before syn can
-  # report anything from it.
+  # Commanded application, before the node joins the scope, so that the first
+  # exchange of registrations with the other nodes already reaches this
+  # module. Calling it again for the same scope changes nothing.
   @doc false
   @spec install_for_scope(scope :: atom()) :: :ok
-  def install_for_scope(scope) do
-    record_earlier_event_handler()
-    :persistent_term.put({__MODULE__, :adapter_scope, scope}, true)
-
-    :syn.set_event_handler(__MODULE__)
-  end
+  def install_for_scope(scope), do: :syn.set_event_handler(scope, __MODULE__)
 
   # Called by the adapter for every name it registers, with the time the
   # process is started.
@@ -133,31 +84,26 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolution do
   @doc """
   Returns the pid to keep for a name registered on two nodes at once.
 
-  In a scope of the adapter both nodes run this and must agree, so the answer
-  comes from the two entries alone: the older `:started_at` wins, and equal
-  timestamps are broken by term order on the pids. In any other scope the
-  event handler installed before the adapter answers when it exports this
-  callback, and syn's own rule answers otherwise.
+  Both nodes run this and must agree, so the answer comes from the two
+  entries alone: the older `:started_at` wins, and equal timestamps are
+  broken by term order on the pids.
   """
   @impl :syn_event_handler
-  def resolve_registry_conflict(scope, name, entry, other_entry) do
-    earlier_event_handler = fetch_earlier_event_handler()
-
+  def resolve_registry_conflict(
+        _scope,
+        _name,
+        {pid, %{started_at: started_at}, _time},
+        {other_pid, %{started_at: other_started_at}, _other_time}
+      ) do
     cond do
-      adapter_scope?(scope) ->
-        keep_first_started(entry, other_entry)
-
-      resolves_conflicts?(earlier_event_handler) ->
-        earlier_event_handler.resolve_registry_conflict(scope, name, entry, other_entry)
-
-      true ->
-        keep_last_registered(entry, other_entry)
+      started_at < other_started_at -> pid
+      other_started_at < started_at -> other_pid
+      true -> max(pid, other_pid)
     end
   end
 
   @doc """
-  Stops a process that has just lost its name in a conflict in one of the
-  adapter's scopes.
+  Stops a process that has just lost its name in a conflict.
 
   syn calls this on every node that held the losing process's entry. Only the
   node that owns the process stops it, and on any other node the call does
@@ -171,119 +117,10 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolution do
 
   The callback runs inside the scope process, which must keep serving
   registrations, so the stop runs in a process of its own.
-
-  In any other scope it does what syn does without the adapter. Unless the
-  event handler installed before the adapter resolves conflicts, it sends the
-  local loser of a conflict the exit signal
-  `{:syn_resolve_kill, name, metadata}`. Then it passes the call on to that
-  handler when the handler exports this callback.
   """
   @impl :syn_event_handler
-  def on_process_unregistered(scope, name, pid, metadata, reason) do
-    if adapter_scope?(scope),
-      do: stop_conflict_loser(scope, name, pid, metadata, reason),
-      else: unregister_without_adapter(scope, name, pid, metadata, reason)
-  end
-
-  # syn calls the callbacks below in every scope. The adapter's scopes need
-  # none of them, and in any other scope they reach the event handler
-  # installed before the adapter.
-
-  @doc false
-  @impl :syn_event_handler
-  def on_process_registered(scope, name, pid, metadata, reason) do
-    arguments = [scope, name, pid, metadata, reason]
-
-    pass_to_earlier_event_handler(scope, :on_process_registered, arguments)
-  end
-
-  @doc false
-  @impl :syn_event_handler
-  def on_registry_process_updated(scope, name, pid, metadata, reason) do
-    arguments = [scope, name, pid, metadata, reason]
-
-    pass_to_earlier_event_handler(scope, :on_registry_process_updated, arguments)
-  end
-
-  @doc false
-  @impl :syn_event_handler
-  def on_registry_process_updated(scope, name, pid, previous_metadata, metadata, reason) do
-    arguments = [scope, name, pid, previous_metadata, metadata, reason]
-
-    pass_to_earlier_event_handler(scope, :on_registry_process_updated, arguments)
-  end
-
-  @doc false
-  @impl :syn_event_handler
-  def on_process_joined(scope, group, pid, metadata, reason) do
-    arguments = [scope, group, pid, metadata, reason]
-
-    pass_to_earlier_event_handler(scope, :on_process_joined, arguments)
-  end
-
-  @doc false
-  @impl :syn_event_handler
-  def on_group_process_updated(scope, group, pid, metadata, reason) do
-    arguments = [scope, group, pid, metadata, reason]
-
-    pass_to_earlier_event_handler(scope, :on_group_process_updated, arguments)
-  end
-
-  @doc false
-  @impl :syn_event_handler
-  def on_group_process_updated(scope, group, pid, previous_metadata, metadata, reason) do
-    arguments = [scope, group, pid, previous_metadata, metadata, reason]
-
-    pass_to_earlier_event_handler(scope, :on_group_process_updated, arguments)
-  end
-
-  @doc false
-  @impl :syn_event_handler
-  def on_process_left(scope, group, pid, metadata, reason) do
-    arguments = [scope, group, pid, metadata, reason]
-
-    pass_to_earlier_event_handler(scope, :on_process_left, arguments)
-  end
-
-  # A second Commanded application finds this module installed already and
-  # keeps the handler the first one found.
-  defp record_earlier_event_handler do
-    case Application.get_env(:syn, :event_handler) do
-      __MODULE__ -> :ok
-      earlier_event_handler -> :persistent_term.put(@earlier_event_handler_key, earlier_event_handler)
-    end
-  end
-
-  defp fetch_earlier_event_handler, do: :persistent_term.get(@earlier_event_handler_key, nil)
-
-  defp resolves_conflicts?(earlier_event_handler), do: function_exported?(earlier_event_handler, :resolve_registry_conflict, 4)
-
-  defp keep_first_started(
-         {pid, %{started_at: started_at}, _time},
-         {other_pid, %{started_at: other_started_at}, _other_time}
-       ) do
-    cond do
-      started_at < other_started_at -> pid
-      other_started_at < started_at -> other_pid
-      true -> max(pid, other_pid)
-    end
-  end
-
-  # syn's own rule, from `syn_event_handler:do_resolve_registry_conflict/4`:
-  # the registration with the later time wins, and equal times go to the
-  # greater pid.
-  defp keep_last_registered({pid, _metadata, time}, {other_pid, _other_metadata, other_time}) do
-    cond do
-      time > other_time -> pid
-      time < other_time -> other_pid
-      true -> max(pid, other_pid)
-    end
-  end
-
-  # Every node that held the entry gets this call; only the owner stops the
-  # process.
-  defp stop_conflict_loser(scope, name, pid, metadata, :syn_conflict_resolution)
-       when node(pid) == node() do
+  def on_process_unregistered(scope, name, pid, metadata, :syn_conflict_resolution)
+      when node(pid) == node() do
     log_conflict_loss(scope, name, pid)
 
     spawn(GenServer, :stop, [pid, choose_stop_reason(metadata)])
@@ -291,40 +128,12 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolution do
     :ok
   end
 
-  defp stop_conflict_loser(_scope, _name, _pid, _metadata, _reason), do: :ok
+  def on_process_unregistered(_scope, _name, _pid, _metadata, _reason), do: :ok
 
   # A registration whose metadata has no `:kind` key is stopped with
   # `:normal`, as an aggregate is.
   defp choose_stop_reason(%{kind: :singleton}), do: @singleton_conflict_loss_reason
   defp choose_stop_reason(_metadata), do: :normal
-
-  # syn sends the kill signal itself, from the loser's own node and right
-  # before it reports the loss, whenever the installed handler leaves
-  # conflicts to syn. Installed in its place, this module sends it instead.
-  defp unregister_without_adapter(scope, name, pid, metadata, reason) do
-    earlier_event_handler = fetch_earlier_event_handler()
-
-    if kill_conflict_loser?(earlier_event_handler, pid, reason), do: Process.exit(pid, {:syn_resolve_kill, name, metadata})
-
-    call_if_exported(earlier_event_handler, :on_process_unregistered, [scope, name, pid, metadata, reason])
-  end
-
-  defp kill_conflict_loser?(earlier_event_handler, pid, :syn_conflict_resolution),
-    do: node(pid) == node() and not resolves_conflicts?(earlier_event_handler)
-
-  defp kill_conflict_loser?(_earlier_event_handler, _pid, _reason), do: false
-
-  defp pass_to_earlier_event_handler(scope, callback, arguments) do
-    if adapter_scope?(scope),
-      do: :ok,
-      else: call_if_exported(fetch_earlier_event_handler(), callback, arguments)
-  end
-
-  defp call_if_exported(earlier_event_handler, callback, arguments) do
-    if function_exported?(earlier_event_handler, callback, length(arguments)),
-      do: apply(earlier_event_handler, callback, arguments),
-      else: :ok
-  end
 
   defp log_conflict_loss(scope, name, pid) do
     [
