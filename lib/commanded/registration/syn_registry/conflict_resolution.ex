@@ -61,9 +61,13 @@ defmodule Commanded.Registration.SynRegistry.ConflictResolution do
   @type registration_metadata :: %{started_at: integer(), kind: registration_kind()}
 
   # Called by `Commanded.Registration.SynRegistry.child_spec/2` for every
-  # Commanded application, before the node joins the scope, so that the first
-  # exchange of registrations with the other nodes already reaches this
-  # module. Calling it again for the same scope changes nothing.
+  # Commanded application, before the node joins the scope. Joining starts the
+  # exchange of registrations with the other nodes, and a scope without a handler
+  # of its own hands the callbacks of that exchange to a node-wide handler of the
+  # host. A conflict needs a registration of this node's own, which the adapter
+  # makes only after `child_spec/2` has returned, so the order is about those
+  # callbacks, not about the rule. Calling it again for the same scope changes
+  # nothing.
   @doc false
   @spec install_for_scope(scope :: atom()) :: :ok
   def install_for_scope(scope), do: :syn.set_event_handler(scope, __MODULE__)

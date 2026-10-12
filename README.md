@@ -403,8 +403,9 @@ dispatch that has to start an aggregate fails instead of waiting. The
 trigger is rare, most often a node that connects while a scope process is
 starting or restarting, but at around 100,000 names in a scope the stall
 lasts minutes.
-[ostinelli/syn#90](https://github.com/ostinelli/syn/pull/90) fixes it. Until
-it is released, keep scopes small: by default an aggregate process keeps its
+[ostinelli/syn#90](https://github.com/ostinelli/syn/pull/90) fixes it, and
+the syn fork this branch pins already carries the fix. Until syn releases it,
+keep scopes small on syn 3.4.2: by default an aggregate process keeps its
 name for as long as it runs, and an aggregate lifespan
 (`Commanded.Aggregates.AggregateLifespan`) that stops idle aggregates
 releases their names.
