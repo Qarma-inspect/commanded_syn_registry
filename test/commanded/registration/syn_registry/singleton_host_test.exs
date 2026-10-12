@@ -125,7 +125,7 @@ defmodule Commanded.Registration.SynRegistry.SingletonHostTest do
   @name_conflict {:shutdown, :name_conflict}
 
   setup do
-    :ok = :syn.set_event_handler(ConflictResolution)
+    :ok = ConflictResolution.install_for_scope(@scope)
     :ok = :syn.add_node_to_scopes([@scope])
 
     adapter_meta = %{application: :adapter_application, scope: @scope, failover_delay_range: {0, 0}}
