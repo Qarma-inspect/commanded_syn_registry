@@ -36,7 +36,7 @@ The package needs Elixir 1.15 or later on OTP 26 or later, `commanded`
 1.4.11 or later within 1.x, and a `syn` with `:syn.set_event_handler/2`, which
 released syn lacks. This branch takes syn from the
 [Qarma-inspect/syn](https://github.com/Qarma-inspect/syn) fork at commit
-1b4a030 until syn ships the function proposed in
+260ea0b until syn ships the function proposed in
 [ostinelli/syn#93](https://github.com/ostinelli/syn/pull/93).
 
 ## Configuration
