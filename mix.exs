@@ -54,7 +54,7 @@ defmodule Commanded.Registration.SynRegistry.MixProject do
   defp deps do
     [
       {:commanded, ">= 1.4.11 and < 2.0.0"},
-      {:syn, ">= 3.4.2 and < 4.0.0"},
+      {:syn, git: "https://github.com/Qarma-inspect/syn.git", ref: "260ea0bcf249cbf7973a01460c7f2f264dcc18e7"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false}

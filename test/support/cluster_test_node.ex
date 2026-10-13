@@ -16,7 +16,6 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
   alias Commanded.Registration.SynRegistry.ClusterTestQuickRejectingSingleton
   alias Commanded.Registration.SynRegistry.ClusterTestRejectingSingleton
   alias Commanded.Registration.SynRegistry.ClusterTestSingleton
-  alias Commanded.Registration.SynRegistry.ConflictResolution
   alias Commanded.Registration.SynRegistry.RecordingEventHandler
   alias Commanded.Registration.SynRegistry.SingletonHost
   alias Commanded.Registration.SynRegistry.SingletonProxy
@@ -25,8 +24,8 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
   @singleton_application :cluster_test_application
 
   @doc """
-  Starts syn on this node and installs `event_handler` as its event handler,
-  the way a host application does before any Commanded application starts.
+  Starts syn on this node and installs `event_handler` as its node-wide event
+  handler, the way a host application does.
   """
   @spec install_event_handler(event_handler :: module()) :: :ok
   def install_event_handler(event_handler) do
@@ -76,16 +75,6 @@ defmodule Commanded.Registration.SynRegistry.ClusterTestNode do
     :ok = :syn.register(scope, name, pid, metadata)
 
     pid
-  end
-
-  @doc """
-  Tells the syn event handler on this node that `loser`, which may run on
-  another node, lost `name` in a conflict in `scope`, as syn does on every
-  node that learns of the loss.
-  """
-  @spec report_conflict_loss(scope :: atom(), name :: term(), loser :: pid(), metadata :: term()) :: term()
-  def report_conflict_loss(scope, name, loser, metadata) do
-    ConflictResolution.on_process_unregistered(scope, name, loser, metadata, :syn_conflict_resolution)
   end
 
   @doc """

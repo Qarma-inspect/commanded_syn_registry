@@ -19,6 +19,11 @@ defmodule Commanded.Registration.SynRegistry do
   router stops with `{:shutdown, :name_conflict}`, and the process hosting
   it starts it again as a proxy for the process that won.
 
+  The adapter installs `Commanded.Registration.SynRegistry.ConflictResolution`
+  as the event handler of the application's scope, with
+  `:syn.set_event_handler/2`, and sets no other handler in syn: a scope the
+  adapter did not create keeps whatever handler it has.
+
   ## One host process per singleton
 
   `start_link/5` starts a host process, internal to this adapter, for every
@@ -89,16 +94,8 @@ defmodule Commanded.Registration.SynRegistry do
   given twice, raises `ArgumentError` naming the application and the key when
   the Commanded application starts.
 
-  ## Effects beyond Commanded, and known limitations
-
-  Starting an application with this adapter installs
-  `Commanded.Registration.SynRegistry.ConflictResolution` as syn's event
-  handler for the whole node. It applies the rule above only in the scopes
-  the adapter created, one per Commanded application, and leaves every other
-  scope to the event handler installed before it, or to syn's own rule when
-  there was none. Its module documentation covers what an event handler
-  installed later has to do. The README section "Known limitations" covers
-  the behaviour that is known to differ from Commanded's local registry.
+  The README section "Known limitations" covers the behaviour that is known
+  to differ from Commanded's local registry.
   """
 
   @behaviour Commanded.Registration.Adapter
@@ -129,9 +126,10 @@ defmodule Commanded.Registration.SynRegistry do
 
   The scope is `application`, the name Commanded started the application
   under: its module, or the `name:` option it was started with. Before
-  adding the scope, the adapter records it as its own and installs
-  `Commanded.Registration.SynRegistry.ConflictResolution` as syn's event
-  handler, which keeps the handler it replaces for every other scope. The
+  adding the scope, the adapter installs
+  `Commanded.Registration.SynRegistry.ConflictResolution` as the event
+  handler of that scope, so the first exchange of registrations with the
+  other nodes already reaches it. It sets no other handler in syn. The
   adapter starts no process of its own and does not wait at boot: the node
   registers names as soon as the scope is added, and syn reconciles them
   with the rest of the cluster.
