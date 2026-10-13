@@ -20,7 +20,7 @@
   [ostinelli/syn#93](https://github.com/ostinelli/syn/pull/93). Until it is
   released, this branch takes syn from
   [Qarma-inspect/syn](https://github.com/Qarma-inspect/syn) at commit
-  1b4a030.
+  260ea0b.
 
 ## v0.1.0
 
